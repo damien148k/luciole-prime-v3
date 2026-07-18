@@ -1008,6 +1008,11 @@ def _find_ragas_db() -> str:
     return candidates[0]
 
 
+def _find_settings_yaml() -> str:
+    """Find settings.yaml in known locations."""
+    return _find_config_file("settings.yaml")
+
+
 @app.get("/api/admin/settings")
 async def get_settings():
     """Read settings.yaml and return as JSON."""

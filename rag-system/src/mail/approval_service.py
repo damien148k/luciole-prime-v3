@@ -18,7 +18,7 @@ from loguru import logger
 from .constants import AuditAction, AuditOutcome, DraftStatus
 from .exceptions import DraftAlreadyReviewedError, DraftNotFoundError
 from .html_renderer import render_email_html
-from .models import DraftApproval, OutboundMessage
+from .models import DraftApproval, InboundMessage, OutboundMessage
 from .state import AuditRepo, DraftRepo, InboundRepo, OutboundRepo
 
 
