@@ -205,9 +205,12 @@ class TestHandleDelete:
         worker: IndexWorker,
         cleaner: MagicMock,
     ) -> None:
+        # Document inconnu du StateStore : pas de crash, et purge fallback
+        # "best effort" par basename dans les vector stores (voir _handle_delete).
         job = Job(file_path="/data/jamais_vu.pdf", action="delete")
         worker._handle_delete(job)
-        cleaner.delete_document_chunks.assert_not_called()
+        cleaner.delete_document_chunks.assert_called_once()
+        assert cleaner.delete_document_chunks.call_args.args[0] == "jamais_vu.pdf"
 
 
 class TestHandleMove:
