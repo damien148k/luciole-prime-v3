@@ -144,7 +144,7 @@ services:
     ports:
       - 0.0.0.0:${CHAT_PORT:-8501}:8501
     restart: unless-stopped
-    command: ["python", "-m", "streamlit", "run", "src/api/chat_ui.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    command: ["python", "-m", "uvicorn", "src.api.chat_ui:app", "--host", "0.0.0.0", "--port", "8501"]
     logging:
       driver: json-file
       options:

@@ -2820,7 +2820,7 @@ async def config_page():
         🏠 Preset luciole-mail local
       </button>
       <span style="font-size:0.75rem;color:var(--text-secondary)">
-        Remplit automatiquement les champs pour le test LAN avec Stalwart Mail
+        Remplit automatiquement les champs pour le test LAN avec GreenMail
       </span>
     </div>
     <div class="mp-toggle-row">
