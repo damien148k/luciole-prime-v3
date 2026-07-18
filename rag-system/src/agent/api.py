@@ -156,13 +156,20 @@ def _get_config():
         config_path = os.environ.get("CONFIG_PATH", "config/settings.yaml")
         with open(config_path, "r", encoding="utf-8") as f:
             _config = yaml.safe_load(f)
-        
+
+        if _config is None:
+            raise RuntimeError(
+                f"Le fichier de configuration {config_path} est vide ou invalide. "
+                "Vérifiez qu'il contient bien les sections requises (qdrant, opensearch, llm, embedding, retrieval, reranker)."
+            )
+
         # Override avec variables d'environnement pour Docker
         qdrant_url = os.environ.get("QDRANT_URL")
         if qdrant_url:
             # Parse URL: http://luciole-qdrant:6333 -> host=luciole-qdrant, port=6333
             from urllib.parse import urlparse
             parsed = urlparse(qdrant_url)
+            _config.setdefault("qdrant", {})
             _config["qdrant"]["host"] = parsed.hostname or "localhost"
             _config["qdrant"]["port"] = parsed.port or 6333
             logger.info(f"Qdrant config from env: {_config['qdrant']['host']}:{_config['qdrant']['port']}")
@@ -171,12 +178,14 @@ def _get_config():
         if opensearch_url:
             from urllib.parse import urlparse
             parsed = urlparse(opensearch_url)
+            _config.setdefault("opensearch", {})
             _config["opensearch"]["host"] = parsed.hostname or "localhost"
             _config["opensearch"]["port"] = parsed.port or 9200
             logger.info(f"OpenSearch config from env: {_config['opensearch']['host']}:{_config['opensearch']['port']}")
         
         llm_url = os.environ.get("LLM_URL") or os.environ.get("OLLAMA_HOST")
         if llm_url:
+            _config.setdefault("llm", {})
             _config["llm"]["base_url"] = llm_url
             logger.info(f"LLM URL config from env: {llm_url}")
     
