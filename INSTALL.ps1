@@ -29,6 +29,7 @@ $DefaultPorts = @{
     QDRANT    = 6333
     OPENSEARCH = 9200
     OLLAMA    = 11434
+    WATCHER   = 8090
     MAIL_SMTP = 25
     MAIL_IMAP = 143
     MAIL_ADMIN_WEB = 8025
@@ -173,7 +174,7 @@ Write-Step "2/8" "Detection des ports disponibles..."
 $script:AllocatedPorts = @()
 $Ports = @{}
 
-foreach ($name in @("API", "ADMIN", "CHAT", "FEEDBACK", "QDRANT", "OPENSEARCH", "OLLAMA", "MAIL_SMTP", "MAIL_IMAP", "MAIL_ADMIN_WEB")) {
+foreach ($name in @("API", "ADMIN", "CHAT", "FEEDBACK", "QDRANT", "OPENSEARCH", "OLLAMA", "WATCHER", "MAIL_SMTP", "MAIL_IMAP", "MAIL_ADMIN_WEB")) {
     $preferred = $DefaultPorts[$name]
     $allocated = Get-NextAvailablePort -PreferredPort $preferred
     $Ports[$name] = $allocated
@@ -368,6 +369,7 @@ FEEDBACK_PORT=$($Ports['FEEDBACK'])
 QDRANT_PORT=$($Ports['QDRANT'])
 OPENSEARCH_PORT=$($Ports['OPENSEARCH'])
 OLLAMA_PORT=$($Ports['OLLAMA'])
+WATCHER_PORT=$($Ports['WATCHER'])
 
 # Ports module mail
 MAIL_SMTP_PORT=$($Ports['MAIL_SMTP'])
@@ -529,6 +531,7 @@ Write-Host "    Admin      : http://localhost:$($Ports['ADMIN'])" -ForegroundCol
 Write-Host "    Feedback   : http://localhost:$($Ports['FEEDBACK'])" -ForegroundColor Cyan
 Write-Host "    API        : http://localhost:$($Ports['API'])" -ForegroundColor Gray
 Write-Host "    Ollama     : http://localhost:$($Ports['OLLAMA'])" -ForegroundColor Gray
+Write-Host "    Watcher    : http://localhost:$($Ports['WATCHER'])" -ForegroundColor Gray
 Write-Host "    Mail admin : http://localhost:$($Ports['MAIL_ADMIN_WEB']) (SMTP:$($Ports['MAIL_SMTP']) IMAP:$($Ports['MAIL_IMAP']))" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Module mail :" -ForegroundColor White

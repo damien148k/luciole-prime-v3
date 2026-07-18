@@ -35,7 +35,7 @@ fi
 # Ports par defaut
 declare -A DEFAULT_PORTS=(
     [API]=8000 [ADMIN]=8080 [CHAT]=8501 [FEEDBACK]=8503
-    [QDRANT]=6333 [OPENSEARCH]=9200 [OLLAMA]=11434
+    [QDRANT]=6333 [OPENSEARCH]=9200 [OLLAMA]=11434 [WATCHER]=8090
     [MAIL_SMTP]=25 [MAIL_IMAP]=143 [MAIL_ADMIN_WEB]=8025
 )
 
@@ -118,7 +118,7 @@ fi
 step "2/8" "Detection des ports disponibles..."
 
 declare -A PORTS
-for name in API ADMIN CHAT FEEDBACK QDRANT OPENSEARCH OLLAMA MAIL_SMTP MAIL_IMAP MAIL_ADMIN_WEB; do
+for name in API ADMIN CHAT FEEDBACK QDRANT OPENSEARCH OLLAMA WATCHER MAIL_SMTP MAIL_IMAP MAIL_ADMIN_WEB; do
     preferred=${DEFAULT_PORTS[$name]}
     allocated=$(get_free_port "$preferred")
     PORTS[$name]=$allocated
@@ -288,6 +288,7 @@ FEEDBACK_PORT=${PORTS[FEEDBACK]}
 QDRANT_PORT=${PORTS[QDRANT]}
 OPENSEARCH_PORT=${PORTS[OPENSEARCH]}
 OLLAMA_PORT=${PORTS[OLLAMA]}
+WATCHER_PORT=${PORTS[WATCHER]}
 
 # Ports module mail
 MAIL_SMTP_PORT=${PORTS[MAIL_SMTP]}
@@ -431,6 +432,7 @@ echo "    Admin      : http://localhost:${PORTS[ADMIN]}"
 echo "    Feedback   : http://localhost:${PORTS[FEEDBACK]}"
 echo "    API        : http://localhost:${PORTS[API]}"
 echo "    Ollama     : http://localhost:${PORTS[OLLAMA]}"
+echo "    Watcher    : http://localhost:${PORTS[WATCHER]}"
 echo "    Mail admin : http://localhost:${PORTS[MAIL_ADMIN_WEB]} (SMTP:${PORTS[MAIL_SMTP]} IMAP:${PORTS[MAIL_IMAP]})"
 echo ""
 echo "  Module mail :"
