@@ -99,13 +99,10 @@ temp/
 *.tmp
 *.bak
 
-# Runtime data — ne pas versionner
+# Runtime data â€” ne pas versionner
 feedbacks/
 data/mail/
 *.mail_key
-
-# Données runtime Stalwart Mail (boîtes, SQLite)
-mail-server/data/
 
 # --- Config par instance (gÃ©nÃ©rÃ© par install.sh depuis settings.yaml.example) ---
 config/settings.yaml
