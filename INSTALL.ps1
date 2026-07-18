@@ -110,7 +110,7 @@ Write-Host ""
 # ETAPE 0 : Verification Docker
 # ============================================================================
 
-Write-Step "0/8" "Verification de Docker..."
+Write-Step "0/9" "Verification de Docker..."
 try {
     $dockerVersion = docker --version 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Docker n'est pas installe" }
@@ -127,7 +127,7 @@ try {
 # ETAPE 1 : Nom de l'instance
 # ============================================================================
 
-Write-Step "1/8" "Configuration de l'instance..."
+Write-Step "1/9" "Configuration de l'instance..."
 
 if ([string]::IsNullOrWhiteSpace($InstanceName)) {
     do {
@@ -169,7 +169,7 @@ if (Test-Path $InstancePath) {
 # ETAPE 2 : Detection des ports
 # ============================================================================
 
-Write-Step "2/8" "Detection des ports disponibles..."
+Write-Step "2/9" "Detection des ports disponibles..."
 
 $script:AllocatedPorts = @()
 $Ports = @{}
@@ -191,7 +191,7 @@ Write-OK "Ports alloues"
 # ETAPE 3 : Chargement des images Docker
 # ============================================================================
 
-Write-Step "3/8" "Chargement des images Docker..."
+Write-Step "3/9" "Chargement des images Docker..."
 
 $dockerImagesDir = Join-Path $PackageDir "docker_images"
 if (Test-Path $dockerImagesDir) {
@@ -229,7 +229,7 @@ Write-OK "Image $lucioleImage disponible"
 # ETAPE 4 : Creation de la structure
 # ============================================================================
 
-Write-Step "4/8" "Creation de la structure pour '$InstanceName'..."
+Write-Step "4/9" "Creation de la structure pour '$InstanceName'..."
 
 $directories = @(
     $InstancePath,
@@ -333,7 +333,7 @@ if (Test-Path "$PackageDir\rag-system\src\mail") {
 # ETAPE 5 : Generation du docker-compose et .env
 # ============================================================================
 
-Write-Step "5/8" "Generation de la configuration Docker..."
+Write-Step "5/9" "Generation de la configuration Docker..."
 
 # Copier docker-compose (le mono-instance x86/AMD = docker-compose.legacy.yml)
 Copy-Item -Path "$PackageDir\docker-compose.legacy.yml" -Destination "$InstancePath\docker-compose.yml" -Force
@@ -402,7 +402,7 @@ Write-OK "docker-compose.yml et .env generes"
 # ETAPE 6 : Generer auth.yaml avec vrai mot de passe
 # ============================================================================
 
-Write-Step "6/8" "Configuration de l'authentification..."
+Write-Step "6/9" "Configuration de l'authentification..."
 
 # Generation d'un mot de passe aleatoire de 16 caracteres (CLM-compatible, pas de [System.Web])
 $pwChars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#%^&*-_"
@@ -455,7 +455,7 @@ Write-OK "auth.yaml genere"
 # ETAPE 7 : Demarrage Ollama + modele LLM
 # ============================================================================
 
-Write-Step "7/8" "Demarrage des services..."
+Write-Step "7/9" "Demarrage des services..."
 
 Set-Location $InstancePath
 
@@ -504,10 +504,42 @@ if ($ollamaList2 -match "qwen2.5-14b-ragas") {
 }
 
 # ============================================================================
-# ETAPE 8 : Demarrage de tous les services
+# ETAPE 8 : Preparation des modeles BGE-M3 (embedding) + reranker
 # ============================================================================
 
-Write-Step "8/8" "Demarrage complet..."
+Write-Step "8/9" "Preparation des modeles BGE-M3 + reranker..."
+
+$agentContainer = "luciole-agent-$InstanceName"
+
+Write-Host "  Demarrage temporaire de l'agent..."
+docker compose --profile $Profile up -d agent
+Write-Host "  Attente demarrage agent (15 s)..."
+Start-Sleep -Seconds 15
+
+# setup_bge_model.py n'est pas embarque dans l'image Docker (script d'installation,
+# pas du code applicatif) : on l'injecte via docker cp avant de l'executer.
+# Ce script gere en une seule passe la conversion de BGE-M3 (evite CVE-2025-32434)
+# et le telechargement du reranker BAAI/bge-reranker-v2-m3 (deja en safetensors).
+docker cp "$PSScriptRoot\setup_bge_model.py" "${agentContainer}:/tmp/setup_bge_model.py"
+
+$ErrorActionPreference = "Continue"
+docker exec -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 $agentContainer python3 /tmp/setup_bge_model.py
+$bgeExitCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+
+if ($bgeExitCode -eq 0) {
+    Write-OK "BGE-M3 + reranker prets"
+} else {
+    Write-Warn "Preparation BGE-M3/reranker echouee -- verifiez les logs : docker compose logs agent"
+}
+
+# Chown non necessaire sous Windows (pas de mapping uid/gid comme sous Linux)
+
+# ============================================================================
+# ETAPE 9 : Demarrage de tous les services
+# ============================================================================
+
+Write-Step "9/9" "Demarrage complet..."
 
 docker compose --profile $Profile up -d
 

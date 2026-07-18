@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-setup_bge_model.py — Prépare le modèle BAAI/bge-m3 pour Luciole Prime V2
+setup_bge_model.py — Prépare les modèles BAAI/bge-m3 (embedding) et
+BAAI/bge-reranker-v2-m3 (reranker) pour Luciole Prime V3
 
-Problème : BAAI/bge-m3 ne distribue que pytorch_model.bin sur HuggingFace.
-PyTorch < 2.6 bloque le chargement de .bin (CVE-2025-32434).
-Ce script télécharge le .bin, le convertit en safetensors, puis supprime le .bin.
+Problème embedding (BAAI/bge-m3) : ce dépôt ne distribue que
+pytorch_model.bin sur HuggingFace. PyTorch < 2.6 bloque le chargement de
+.bin (CVE-2025-32434). Ce script télécharge le .bin, le convertit en
+safetensors, puis supprime le .bin.
+
+Le reranker (BAAI/bge-reranker-v2-m3) est distribué nativement en
+safetensors : un simple téléchargement (snapshot_download) suffit, sans
+conversion.
 
 Usage (depuis le dossier du projet) :
     docker compose run --rm \\
@@ -14,11 +20,11 @@ Usage (depuis le dossier du projet) :
       -v "${PWD}/setup_bge_model.py:/setup_bge_model.py" \\
       agent python /setup_bge_model.py
 
-Durée estimée : 3 à 5 minutes (téléchargement ~2.3 Go + conversion)
+Durée estimée : 4 à 6 minutes (téléchargements ~2.3 Go + ~1 Go + conversion)
 """
 
 from pathlib import Path
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, snapshot_download
 
 # IMPORTANT : on ecrit dans le sous-dossier `hub/` car c'est l'emplacement
 # standard du cache HuggingFace (HF_HOME/hub) et celui qu'embedder.py /
@@ -27,7 +33,7 @@ HF_CACHE = "/app/models/huggingface/hub"
 REPO_ID  = "BAAI/bge-m3"
 
 # ─── Étape 1 : Télécharger tous les fichiers de config ────────────────────────
-print("\n[1/4] Téléchargement des fichiers de configuration...")
+print("\n[1/5] Téléchargement des fichiers de configuration...")
 
 config_files = [
     "config.json",
@@ -56,7 +62,7 @@ for f in config_files:
         print(f"  IGNORÉ : {f} ({e})")
 
 # ─── Étape 2 : Télécharger pytorch_model.bin ──────────────────────────────────
-print("\n[2/4] Téléchargement de pytorch_model.bin (~2.3 Go)...")
+print("\n[2/5] Téléchargement de pytorch_model.bin (~2.3 Go)...")
 
 bin_path = hf_hub_download(
     repo_id=REPO_ID,
@@ -67,7 +73,7 @@ bin_path = hf_hub_download(
 print(f"  Téléchargé : {bin_path}")
 
 # ─── Étape 3 : Convertir en safetensors ───────────────────────────────────────
-print("\n[3/4] Conversion pytorch_model.bin → model.safetensors...")
+print("\n[3/5] Conversion pytorch_model.bin → model.safetensors...")
 
 import torch
 from safetensors.torch import save_file
@@ -123,7 +129,7 @@ print(f"  Sauvegardé : {out}")
 print(f"  Taille     : {out.stat().st_size // 1024 // 1024} Mo")
 
 # ─── Étape 4 : Supprimer pytorch_model.bin (évite erreur CVE au démarrage) ────
-print("\n[4/4] Suppression de pytorch_model.bin...")
+print("\n[4/5] Suppression de pytorch_model.bin...")
 
 bin_in_snap = snap / "pytorch_model.bin"
 if bin_in_snap.exists() or bin_in_snap.is_symlink():
@@ -140,5 +146,26 @@ for b in (cache / "blobs").iterdir():
         b.unlink()
         print(f"  Blob .bin supprimé : {b.name[:20]}...")
 
-print("\n✅ BGE-M3 prêt. Vérifiez le health check :")
+print("\n✅ BGE-M3 prêt.")
+
+# ─── Étape 5 : Télécharger le reranker BAAI/bge-reranker-v2-m3 ───────────────
+# Distribué nativement en safetensors (pas de CVE pickle, pas de conversion
+# nécessaire) : un snapshot_download suffit.
+print("\n[5/5] Téléchargement du reranker BAAI/bge-reranker-v2-m3 (~1 Go)...")
+
+RERANKER_REPO_ID = "BAAI/bge-reranker-v2-m3"
+reranker_cache = Path(HF_CACHE) / "models--BAAI--bge-reranker-v2-m3"
+reranker_already_present = list(reranker_cache.glob("snapshots/*/model.safetensors")) if reranker_cache.exists() else []
+
+if reranker_already_present:
+    print(f"  Déjà présent : {reranker_already_present[0]}")
+else:
+    reranker_snapshot = snapshot_download(
+        repo_id=RERANKER_REPO_ID,
+        cache_dir=HF_CACHE,
+        local_files_only=False
+    )
+    print(f"  Téléchargé : {reranker_snapshot}")
+
+print("\n✅ BGE-M3 + reranker prêts. Vérifiez le health check :")
 print("   (Invoke-WebRequest -Uri 'http://localhost:8000/api/health' -UseBasicParsing).Content")

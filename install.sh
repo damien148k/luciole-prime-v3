@@ -406,39 +406,24 @@ else
     docker exec "$OLLAMA_CONTAINER" ollama pull "$MODEL"
 fi
 
-# BGE-M3 : conversion safetensors (obligatoire, evite CVE-2025-32434)
+# BGE-M3 (conversion safetensors, evite CVE-2025-32434) + reranker
+# BGE-Reranker-v2-M3 (telechargement direct, deja en safetensors) :
+# setup_bge_model.py gere les deux modeles en une seule passe.
 echo ""
-echo "  Preparation du modele BGE-M3 (conversion safetensors)..."
+echo "  Preparation des modeles BGE-M3 + reranker..."
 AGENT_CONTAINER="luciole-agent-$INSTANCE_NAME"
 
-# Lancer l'agent temporairement pour faire la conversion dans le container
+# Lancer l'agent temporairement pour faire le telechargement/conversion dans le container
 docker compose --profile "$PROFILE" up -d agent
 echo "  Attente demarrage agent (15 s)..."
 sleep 15
 
-if docker exec "$AGENT_CONTAINER" test -f /app/setup_bge_model.py 2>/dev/null; then
-    docker exec -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 "$AGENT_CONTAINER" python3 /app/setup_bge_model.py && ok "BGE-M3 converti en safetensors" || warn "Conversion BGE-M3 echouee -- verifiez les logs : docker compose logs agent"
-else
-    warn "setup_bge_model.py absent du container -- BGE-M3 non converti"
-    warn "Lancez manuellement apres installation : docker exec $AGENT_CONTAINER python3 /app/setup_bge_model.py"
-fi
-
-# Reranker bge-reranker-v2-m3 : telechargement officiel (snapshot_download)
-echo ""
-echo "  Telechargement du reranker BGE-Reranker-v2-M3..."
-RERANKER_DIR="$INSTANCE_PATH/models/huggingface/hub/models--BAAI--bge-reranker-v2-m3"
-if [ -d "$RERANKER_DIR" ] && [ -n "$(ls -A "$RERANKER_DIR/snapshots" 2>/dev/null)" ]; then
-    ok "Reranker deja present (cache local detecte)"
-else
-    docker exec \
-        -e HF_HUB_OFFLINE=0 \
-        -e TRANSFORMERS_OFFLINE=0 \
-        -e HF_HOME=/app/models/huggingface \
-        "$AGENT_CONTAINER" \
-        python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='BAAI/bge-reranker-v2-m3', cache_dir='/app/models/huggingface/hub')" \
-        && ok "Reranker BGE-Reranker-v2-M3 telecharge" \
-        || warn "Telechargement reranker echoue -- verifiez la connectivite internet"
-fi
+# setup_bge_model.py n'est pas embarque dans l'image Docker (script d'installation,
+# pas du code applicatif) : on l'injecte via docker cp avant de l'executer.
+docker cp "$SCRIPT_DIR/setup_bge_model.py" "${AGENT_CONTAINER}:/tmp/setup_bge_model.py"
+docker exec -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 "$AGENT_CONTAINER" python3 /tmp/setup_bge_model.py \
+    && ok "BGE-M3 + reranker prets" \
+    || warn "Preparation BGE-M3/reranker echouee -- verifiez les logs : docker compose logs agent"
 
 # Chown final des modeles (uid 1000 = utilisateur dans le container)
 $SUDO chown -R 1000:1000 "$INSTANCE_PATH/models/huggingface" 2>/dev/null || true
