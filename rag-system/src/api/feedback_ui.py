@@ -346,7 +346,7 @@ async def _trigger_ragas_on_negative(question: str, answer: str, sources_json: s
 async def get_feedbacks(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    feedback_type: Optional[str] = Query(None, regex="^(up|down)$"),
+    feedback_type: Optional[str] = Query(None, pattern="^(up|down)$"),
     user_id: Optional[str] = None
 ):
     """Récupère la liste des feedbacks"""

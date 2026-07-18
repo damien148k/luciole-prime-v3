@@ -295,7 +295,7 @@ async def test_send(request: Request, payload: TestSendRequest):
 
 @router.get("/test-runs")
 async def list_test_runs(
-    test_type: Optional[str] = Query(None, regex="^(connection|send)$"),
+    test_type: Optional[str] = Query(None, pattern="^(connection|send)$"),
     limit: int = Query(10, ge=1, le=50),
 ):
     """Retourne les derniers tests de connexion / envoi."""
@@ -394,7 +394,7 @@ async def get_thread(thread_id: int):
 
 @router.get("/drafts")
 async def list_drafts(
-    status: str = Query("pending", regex="^(pending|approved|modified_approved|rejected|expired)$"),
+    status: str = Query("pending", pattern="^(pending|approved|modified_approved|rejected|expired)$"),
     limit: int  = Query(50, ge=1, le=200),
 ):
     """Liste les brouillons (par défaut : en attente de validation)."""
