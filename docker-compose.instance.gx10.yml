@@ -1,0 +1,15 @@
+# =============================================================================
+# docker-compose.instance.gx10.yml — Override GX10 pour une instance métier
+# =============================================================================
+
+services:
+  agent:
+    image: luciole-gpu:arm64
+  admin-ui:
+    image: luciole-gpu:arm64
+  chat:
+    image: luciole-gpu:arm64
+  feedback:
+    image: luciole-gpu:arm64
+  watcher:
+    image: luciole-gpu:arm64

@@ -1,0 +1,19 @@
+# =============================================================================
+# docker-compose.shared-llm.gx10.yml — Override GX10 pour le stack LLM partagé
+# =============================================================================
+
+services:
+
+  tensorrt-llm-shared:
+    image: nvcr.io/nvidia/tensorrt-llm/release:1.2.0rc2
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    shm_size: "16gb"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - ./models/hf_models:/hf_models
+      - ./scripts/trt_entrypoint.gx10.sh:/opt/entrypoint.sh:ro

@@ -1,0 +1,280 @@
+# =============================================================================
+# docker-compose.instance.yml — Stack métier (une instance = un métier)
+#
+# Ce fichier est utilisé par install_gx10.sh pour chaque instance métier.
+# Il ne contient PAS de service tensorrt-llm — le LLM est partagé via le
+# réseau "luciole_shared" (docker-compose.shared-llm.yml).
+#
+# Usage (géré automatiquement par install_gx10.sh) :
+#   INSTANCE_NAME=support API_PORT=8000 ... \
+#   docker compose -f docker-compose.instance.yml -f docker-compose.instance.gx10.yml \
+#     --project-name luciole-support --profile gpu up -d
+# =============================================================================
+
+services:
+
+  # ── Qdrant (vectorDB) — une instance par métier ───────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: luciole-qdrant-${INSTANCE_NAME}
+    restart: unless-stopped
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    ports:
+      - 127.0.0.1:${QDRANT_PORT:-6333}:6333
+    networks:
+      - instance_net
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # ── OpenSearch (BM25) — une instance par métier ───────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: luciole-opensearch-${INSTANCE_NAME}
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    ports:
+      - 127.0.0.1:${OPENSEARCH_PORT:-9200}:9200
+    networks:
+      - instance_net
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # ── Agent RAG ─────────────────────────────────────────────────────────────
+  agent:
+    image: luciole-gpu:latest
+    container_name: luciole-agent-${INSTANCE_NAME}
+    profiles:
+      - gpu
+    depends_on:
+      - qdrant
+      - opensearch
+    environment:
+      - TZ=${TZ:-Europe/Paris}
+      - INSTANCE_NAME=${INSTANCE_NAME}
+      - QDRANT_URL=http://qdrant:6333
+      - OPENSEARCH_URL=http://opensearch:9200
+      - LLM_URL=http://tensorrt-llm-shared:8000
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/app/models/huggingface
+      - SENTENCE_TRANSFORMERS_HOME=/app/models/huggingface
+      - CONFIG_PATH=/app/config/settings.yaml
+      - MULTI_INDEX_MODE=false
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data:ro
+      - ${HF_MODELS_PATH:-./models/huggingface}:/app/models/huggingface
+      - ./evaluation:/app/evaluation
+    ports:
+      - 0.0.0.0:${API_PORT:-8000}:8000
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - instance_net
+      - luciole_shared
+
+  # ── Admin UI ──────────────────────────────────────────────────────────────
+  admin-ui:
+    image: luciole-gpu:latest
+    container_name: luciole-admin-${INSTANCE_NAME}
+    profiles:
+      - gpu
+    depends_on:
+      - agent
+      - qdrant
+      - opensearch
+    environment:
+      - TZ=${TZ:-Europe/Paris}
+      - INSTANCE_NAME=${INSTANCE_NAME}
+      - AGENT_URL=http://agent:8000
+      - LLM_URL=http://tensorrt-llm-shared:8000
+      - QDRANT_URL=http://qdrant:6333
+      - OPENSEARCH_URL=http://opensearch:9200
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/app/models/huggingface
+      - SENTENCE_TRANSFORMERS_HOME=/app/models/huggingface
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ${HF_MODELS_PATH:-./models/huggingface}:/app/models/huggingface
+    ports:
+      - 0.0.0.0:${ADMIN_PORT:-8080}:8080
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "src.api.admin_ui:app", "--host", "0.0.0.0", "--port", "8080"]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - instance_net
+      - luciole_shared
+
+  # ── Chat UI ───────────────────────────────────────────────────────────────
+  chat:
+    image: luciole-gpu:latest
+    container_name: luciole-chat-${INSTANCE_NAME}
+    profiles:
+      - gpu
+    depends_on:
+      - agent
+    environment:
+      - TZ=${TZ:-Europe/Paris}
+      - INSTANCE_NAME=${INSTANCE_NAME}
+      - AGENT_URL=http://agent:8000
+    volumes:
+      - ./config:/app/config:ro
+    ports:
+      - 0.0.0.0:${CHAT_PORT:-8501}:8501
+    restart: unless-stopped
+    command: ["python", "-m", "streamlit", "run", "src/api/chat_ui.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - instance_net
+
+  # ── Feedback UI ───────────────────────────────────────────────────────────
+  feedback:
+    image: luciole-gpu:latest
+    container_name: luciole-feedback-${INSTANCE_NAME}
+    profiles:
+      - gpu
+    depends_on:
+      - agent
+    environment:
+      - TZ=${TZ:-Europe/Paris}
+      - INSTANCE_NAME=${INSTANCE_NAME}
+      - AGENT_URL=http://agent:8000
+      - LLM_URL=http://tensorrt-llm-shared:8000
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/app/models/huggingface
+      - MAIL_DB_PATH=/app/feedbacks/mail.db
+      - MAIL_ATTACHMENTS_PATH=/app/feedbacks/mail_attachments
+      - MAIL_ENCRYPTION_KEY=${MAIL_ENCRYPTION_KEY:-}
+    volumes:
+      - ./config:/app/config
+      - ./feedbacks:/app/feedbacks
+      - ${HF_MODELS_PATH:-./models/huggingface}:/app/models/huggingface
+    ports:
+      - 0.0.0.0:${FEEDBACK_PORT:-8503}:8503
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "src.api.feedback_ui:app", "--host", "0.0.0.0", "--port", "8503"]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - instance_net
+      - luciole_shared
+
+  # ── Watcher ───────────────────────────────────────────────────────────────
+  watcher:
+    image: luciole-gpu:latest
+    container_name: luciole-watcher-${INSTANCE_NAME}
+    profiles:
+      - gpu
+    depends_on:
+      - qdrant
+      - opensearch
+    environment:
+      - TZ=${TZ:-Europe/Paris}
+      - INSTANCE_NAME=${INSTANCE_NAME}
+      - MULTI_INDEX_MODE=false
+      - QDRANT_URL=http://qdrant:6333
+      - OPENSEARCH_URL=http://opensearch:9200
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/app/models/huggingface
+      - SENTENCE_TRANSFORMERS_HOME=/app/models/huggingface
+      - CUDA_VISIBLE_DEVICES=
+      - WATCHER_ENABLED=${WATCHER_ENABLED:-true}
+      - WATCHER_INDEX_NAME=${INSTANCE_NAME}
+      - WATCHER_DB_PATH=/app/backups/watcher/watcher.db
+      - WATCHER_POLLING_INTERVAL=${WATCHER_POLLING_INTERVAL:-5}
+      - WATCHER_DEBOUNCE_SECONDS=3
+      - WATCHER_MAX_FILE_SIZE_MB=500
+      - WATCHER_RECONCILE_INTERVAL=60
+      - WATCHER_RETRY_MAX_ATTEMPTS=3
+      - WATCHER_WORKER_THREADS=1
+      - WATCHER_PORT=8090
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data:ro
+      - ./backups:/app/backups
+      - ${HF_MODELS_PATH:-./models/huggingface}:/app/models/huggingface
+    ports:
+      - 127.0.0.1:${WATCHER_PORT:-8090}:8090
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "src.watcher.main:app", "--host", "0.0.0.0", "--port", "8090"]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - instance_net
+
+  # ── Mail (GreenMail) ──────────────────────────────────────────────────────
+  luciole-mail:
+    image: greenmail/standalone:latest
+    container_name: luciole-mail-${INSTANCE_NAME}
+    hostname: mail
+    profiles:
+      - gpu
+      - cpu
+    environment:
+      - TZ=${TZ:-Europe/Paris}
+      - GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled=true -Dgreenmail.verbose=false
+      - JAVA_OPTS=-Xms64m -Xmx256m
+    ports:
+      - 0.0.0.0:${MAIL_SMTP_PORT:-25}:3025
+      - 0.0.0.0:${MAIL_IMAP_PORT:-143}:3143
+      - 127.0.0.1:${MAIL_ADMIN_PORT:-8025}:8080
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/3025' && bash -c 'echo > /dev/tcp/localhost/3143' || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - instance_net
+
+volumes:
+  qdrant_storage:
+  opensearch_data:
+
+networks:
+  instance_net:
+    name: luciole_${INSTANCE_NAME}_net
+    driver: bridge
+  luciole_shared:
+    external: true
+    name: luciole_shared

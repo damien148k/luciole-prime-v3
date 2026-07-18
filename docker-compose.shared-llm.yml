@@ -1,0 +1,53 @@
+# =============================================================================
+# docker-compose.shared-llm.yml — Stack TRT-LLM partagé entre toutes les instances
+#
+# Ce stack est indépendant des instances métier. Il expose le LLM sur le
+# réseau Docker "luciole_shared" accessible par toutes les instances.
+#
+# Lancement UNIQUE (une seule fois sur le GX10) :
+#   docker compose -f docker-compose.shared-llm.yml -f docker-compose.shared-llm.gx10.yml up -d
+#
+# Les instances métier pointent vers ce LLM via :
+#   LLM_URL=http://tensorrt-llm-shared:8000
+# =============================================================================
+
+services:
+
+  tensorrt-llm-shared:
+    image: nvcr.io/nvidia/tritonserver:24.12-trtllm-python-py3
+    container_name: luciole-tensorrt-shared
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:8001:8000
+    volumes:
+      - ./models/hf_models:/hf_models
+      - ./scripts/trt_entrypoint.gx10.sh:/opt/entrypoint.sh:ro
+    environment:
+      - TZ=${TZ:-Europe/Paris}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/hf_models
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - MODEL_PATH=/hf_models/Qwen3-30B-A3B-Instruct-2507-NVFP4
+      - SERVED_MODEL_NAME=qwen3-30b-a3b-instruct
+      - KV_CACHE_FREE_GPU_MEM_FRACTION=${KV_CACHE_FREE_GPU_MEM_FRACTION:-0.70}
+      - MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-8}
+      - MAX_NUM_TOKENS=${MAX_NUM_TOKENS:-16384}
+      - MAX_SEQ_LEN=${MAX_SEQ_LEN:-32768}
+      - CUTE_DSL_ARCH=sm_121a
+      - FLASHINFER_DISABLE_VERSION_CHECK=1
+    entrypoint: ["/bin/bash", "/opt/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/v1/models || exit 1"]
+      interval: 60s
+      timeout: 30s
+      retries: 15
+      start_period: 600s
+    networks:
+      - luciole_shared
+
+networks:
+  luciole_shared:
+    name: luciole_shared
+    driver: bridge
