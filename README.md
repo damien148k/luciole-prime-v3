@@ -2,9 +2,13 @@
 
 <img src="https://lucioleprime.com/assets/favicon-512.png" alt="Logo Luciole" width="120"/>
 
-# Luciole
+# Luciole Prime v3
 
 **L'IA générative souveraine, installée chez vous.**
+
+> **v3** unifie deux architectures dans une seule base de code :
+> - **x86 / AMD** — mono-instance, backend LLM Ollama ou LM Studio (héritage v2)
+> - **ARM64 / NVIDIA GX10 · DGX Spark · GB10 (Blackwell sm_121)** — multi-instances métier partageant un backend **TensorRT-LLM** (Qwen3-30B-A3B-Instruct NVFP4)
 
 [![Licence: AGPL v3](https://img.shields.io/badge/Licence-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Made in France](https://img.shields.io/badge/Made%20in-France-002654?labelColor=ED2939)](https://lucioleprime.com)
@@ -72,13 +76,26 @@ Conçue pour les entreprises françaises et européennes qui souhaitent **garder
 
 ### Stack technique
 
-- **Backend** : Python 3.11+ / FastAPI / Pydantic
-- **Embeddings** : `multilingual-e5-large` (Hugging Face)
-- **Vector DB** : OpenSearch (recherche hybride dense + BM25)
-- **LLM** : LM Studio ou Ollama (Mistral, Llama 3, Qwen, ou modèles fine-tunés)
+- **Backend** : Python 3.11+ (3.12 sur GX10) / FastAPI / Pydantic
+- **Embeddings** : `BAAI/bge-m3` (Hugging Face)
+- **Reranking** : `BAAI/bge-reranker-v2-m3`
+- **Vector DB** : Qdrant ou OpenSearch (recherche hybride dense + BM25)
+- **LLM** : contrat unifié OpenAI-compatible via `LLM_URL`
+  - **Ollama / LM Studio** (x86/AMD) — Qwen2.5, Mistral, Llama 3, modèles fine-tunés
+  - **TensorRT-LLM** (ARM64/Blackwell) — Qwen3-30B-A3B-Instruct-2507 NVFP4
 - **Ingestion** : pypdf, python-docx, openpyxl, BeautifulSoup, OCR (Tesseract)
-- **Déploiement** : Docker Compose (single-node) ou Kubernetes (cluster)
-- **Frontend** : interface web légère HTML/JS (modulaire)
+- **Déploiement** : Docker Compose — mono-instance (`docker-compose.legacy.yml`) ou LLM partagé + N instances métier (`docker-compose.shared-llm*.yml` + `docker-compose.instance*.yml`)
+- **Frontend** : interface web légère HTML/JS (FastAPI + uvicorn)
+
+### Architectures de déploiement v3
+
+| Cible | Compose | LLM | Instances |
+|---|---|---|---|
+| x86 / AMD (mono) | `docker-compose.legacy.yml` | Ollama / LM Studio | 1 |
+| ARM64 GX10 / GB10 (partagé) | `docker-compose.shared-llm.gx10.yml` | TensorRT-LLM | N métiers |
+| ARM64 — une instance métier | `docker-compose.instance.gx10.yml` | (réseau `luciole_shared`) | 1 par métier |
+
+Le déploiement multi-instances repose sur un réseau Docker externe `luciole_shared` : **1 backend TensorRT-LLM ↔ N instances métier**, chacune avec son propre index (voir `MULTI_INDEX_MODE`). Chaque métier peut charger ses propres règles de *query rewriting* via `BUSINESS_PROFILE` (voir `config/profiles/README.md`).
 
 ---
 
@@ -133,10 +150,13 @@ Les identifiants admin sont sauvegardés dans `INSTANCE_CREDENTIALS.txt` à la r
 
 ## Documentation
 
-- 📘 [Guide d'installation complet](GUIDE_INSTALLATION.md) — installation pas-à-pas, online et offline
-- ✅ [Vérifications post-déploiement](VERIFICATION_POST_DEPLOIEMENT.md) — checklist de validation après install
+- 📘 [Guide d'installation complet](GUIDE_INSTALLATION.md) — installation pas-à-pas, online et offline (x86/AMD)
+- 🖥️ [Guide d'installation GX10 / DGX Spark](GUIDE_INSTALLATION_GX10.md) — ARM64 / Blackwell, LLM partagé + multi-instances
+- 🔀 [Guide de migration v2 → v3](MIGRATION_GUIDE.md) — passer de la mono-instance à l'architecture v3
+- 📝 [Journal des modifications](CHANGELOG.md) — historique des versions
+- 🎯 [Profils métier](config/profiles/README.md) — mécanisme `BUSINESS_PROFILE`
 - 🔧 [Configuration de référence](config/) — fichiers `settings.yaml`, `prompts.yaml`, `synonyms.txt`
-- 🐳 [Docker Compose](docker-compose.yml) — orchestration des services
+- 🐳 Docker Compose — `docker-compose.legacy.yml` (mono) · `docker-compose.shared-llm*.yml` + `docker-compose.instance*.yml` (multi)
 - 🔐 [Politique de sécurité](SECURITY.md) — comment signaler une vulnérabilité
 
 ---
@@ -178,9 +198,12 @@ Avec Luciole, vous gardez le contrôle :
 - [x] Interface web de chat
 - [x] API REST documentée
 - [x] Ingestion PDF/Word/Excel/Markdown
+- [x] Backend TensorRT-LLM (ARM64/Blackwell GX10/GB10)
+- [x] Architecture LLM partagé + N instances métier
+- [x] Profils métier via `BUSINESS_PROFILE`
 - [ ] Connecteurs SharePoint et Confluence
-- [ ] Mode multi-tenant
-- [ ] Fine-tuning assisté sur corpus client
+- [ ] Orchestrateur multi-instances (provisioning automatisé)
+- [ ] Fine-tuning LoRA par métier (v3.1)
 - [ ] Module NMT+LLM pour traduction souveraine
 - [ ] Interface d'administration avancée
 
