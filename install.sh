@@ -185,9 +185,7 @@ $SUDO mkdir -p \
     "$INSTANCE_PATH/src_overrides/api" \
     "$INSTANCE_PATH/src_overrides/ingestion" \
     "$INSTANCE_PATH/src_overrides/mail" \
-    "$INSTANCE_PATH/src_overrides/watcher" \
-    "$INSTANCE_PATH/mail-server/config" \
-    "$INSTANCE_PATH/mail-server/init"
+    "$INSTANCE_PATH/src_overrides/watcher"
 
 $SUDO chown -R "$(id -u):$(id -g)" "$INSTANCE_PATH"
 ok "Repertoires crees"
@@ -203,18 +201,12 @@ if [ ! -f "$INSTANCE_PATH/config/settings.yaml" ] && [ -f "$INSTANCE_PATH/config
 fi
 ok "Configuration copiee"
 
-# Copier docker-compose.yml
-cp "$SCRIPT_DIR/docker-compose.yml" "$INSTANCE_PATH/docker-compose.yml"
+# Copier docker-compose (le mono-instance x86/AMD = docker-compose.legacy.yml)
+cp "$SCRIPT_DIR/docker-compose.legacy.yml" "$INSTANCE_PATH/docker-compose.yml"
 ok "docker-compose.yml copie"
 
 # Copier manage.sh
 [ -f "$SCRIPT_DIR/manage.sh" ] && cp "$SCRIPT_DIR/manage.sh" "$INSTANCE_PATH/manage.sh" && chmod +x "$INSTANCE_PATH/manage.sh"
-
-# Copier mail-server
-if [ -d "$SCRIPT_DIR/mail-server" ]; then
-    cp -r "$SCRIPT_DIR/mail-server/"* "$INSTANCE_PATH/mail-server/"
-    ok "mail-server copie"
-fi
 
 # Copier src_overrides (nettoyer les faux dossiers Docker avant)
 if [ -d "$SCRIPT_DIR/src_overrides" ]; then

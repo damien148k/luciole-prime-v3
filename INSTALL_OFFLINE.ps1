@@ -310,9 +310,7 @@ $directories = @(
     "$InstancePath\src_overrides\agent",
     "$InstancePath\src_overrides\api",
     "$InstancePath\src_overrides\mail",
-    "$InstancePath\src_overrides\ingestion",
-    "$InstancePath\mail-server\config",
-    "$InstancePath\mail-server\init"
+    "$InstancePath\src_overrides\ingestion"
 )
 
 foreach ($dir in $directories) {
@@ -346,8 +344,8 @@ if (-not (Test-Path "$InstancePath\config\settings.yaml") -and (Test-Path "$Inst
     Write-OK "settings.yaml genere depuis settings.yaml.example"
 }
 
-# Copier docker-compose.yml
-Copy-Item -Path "$PackagePath\docker-compose.yml" -Destination "$InstancePath\docker-compose.yml" -Force
+# Copier docker-compose (le mono-instance x86/AMD = docker-compose.legacy.yml)
+Copy-Item -Path "$PackagePath\docker-compose.legacy.yml" -Destination "$InstancePath\docker-compose.yml" -Force
 Write-OK "docker-compose.yml copie"
 
 # Copier MANAGE.ps1
@@ -362,13 +360,6 @@ if (Test-Path "$PackagePath\src_overrides") {
     Write-OK "src_overrides copies"
 } else {
     Write-Host "  [SKIP] Pas de src_overrides dans le package" -ForegroundColor DarkYellow
-}
-
-# Copier mail-server (configuration Greenmail + scripts d'initialisation)
-if (Test-Path "$PackagePath\mail-server") {
-    Write-Host "  Copie de mail-server..."
-    cmd /c "xcopy `"$PackagePath\mail-server`" `"$InstancePath\mail-server`" /E /H /Y /Q"
-    Write-OK "mail-server copie"
 }
 
 # Copier les modeles HuggingFace (xcopy car docker cp cree des fichiers invisibles pour PowerShell)

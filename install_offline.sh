@@ -177,9 +177,7 @@ $SUDO mkdir -p \
     "$INSTANCE_PATH/src_overrides/api" \
     "$INSTANCE_PATH/src_overrides/ingestion" \
     "$INSTANCE_PATH/src_overrides/mail" \
-    "$INSTANCE_PATH/src_overrides/watcher" \
-    "$INSTANCE_PATH/mail-server/config" \
-    "$INSTANCE_PATH/mail-server/init"
+    "$INSTANCE_PATH/src_overrides/watcher"
 
 $SUDO chown -R "$(id -u):$(id -g)" "$INSTANCE_PATH"
 ok "Repertoires crees"
@@ -199,7 +197,7 @@ if [ ! -f "$INSTANCE_PATH/config/settings.yaml" ] && [ -f "$INSTANCE_PATH/config
 fi
 ok "Configuration copiee"
 
-cp "$PACKAGE_PATH/docker-compose.yml" "$INSTANCE_PATH/docker-compose.yml"
+cp "$PACKAGE_PATH/docker-compose.legacy.yml" "$INSTANCE_PATH/docker-compose.yml"
 ok "docker-compose.yml copie"
 
 [ -f "$PACKAGE_PATH/manage.sh" ] && cp "$PACKAGE_PATH/manage.sh" "$INSTANCE_PATH/manage.sh" && chmod +x "$INSTANCE_PATH/manage.sh"
@@ -215,12 +213,6 @@ if [ -d "$PACKAGE_PATH/src_overrides" ]; then
     fi
     cp -r "$PACKAGE_PATH/src_overrides/"* "$INSTANCE_PATH/src_overrides/" 2>/dev/null || true
     ok "src_overrides copies"
-fi
-
-# Copier mail-server (config Greenmail + init)
-if [ -d "$PACKAGE_PATH/mail-server" ]; then
-    cp -r "$PACKAGE_PATH/mail-server/"* "$INSTANCE_PATH/mail-server/"
-    ok "mail-server copie"
 fi
 
 # Copier les modeles

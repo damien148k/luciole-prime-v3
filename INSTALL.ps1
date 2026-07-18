@@ -245,9 +245,7 @@ $directories = @(
     "$InstancePath\src_overrides\api",
     "$InstancePath\src_overrides\mail",
     "$InstancePath\src_overrides\ingestion",
-    "$InstancePath\src_overrides\watcher",
-    "$InstancePath\mail-server\config",
-    "$InstancePath\mail-server\init"
+    "$InstancePath\src_overrides\watcher"
 )
 
 foreach ($dir in $directories) {
@@ -304,14 +302,8 @@ if (Test-Path "$PackageDir\rag-system\src\mail") {
 
 Write-Step "5/8" "Generation de la configuration Docker..."
 
-# Copier docker-compose.yml
-Copy-Item -Path "$PackageDir\docker-compose.yml" -Destination "$InstancePath\docker-compose.yml" -Force
-
-# Copier mail-server
-if (Test-Path "$PackageDir\mail-server") {
-    cmd /c "xcopy `"$PackageDir\mail-server`" `"$InstancePath\mail-server`" /E /H /Y /Q" | Out-Null
-    Write-OK "mail-server copie"
-}
+# Copier docker-compose (le mono-instance x86/AMD = docker-compose.legacy.yml)
+Copy-Item -Path "$PackageDir\docker-compose.legacy.yml" -Destination "$InstancePath\docker-compose.yml" -Force
 
 # Generer .env
 $chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
