@@ -45,7 +45,7 @@ MAIL_ENCRYPTION_KEY = os.environ.get("MAIL_ENCRYPTION_KEY", "")
 MAIL_WORKER_PORT = int(os.environ.get("MAIL_WORKER_PORT", "8510"))
 AGENT_URL = os.environ.get("AGENT_URL", "http://localhost:8000")
 MAIL_DEFAULT_INDEX = os.environ.get("MAIL_DEFAULT_INDEX", "documents")
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
+LLM_URL = os.environ.get("LLM_URL", os.environ.get("OLLAMA_URL", "http://tensorrt-llm:8000"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

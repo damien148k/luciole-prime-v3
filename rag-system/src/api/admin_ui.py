@@ -1230,16 +1230,16 @@ class RagasEvalRequest(BaseModel):
 async def evaluate_ragas(req: RagasEvalRequest):
     """Trigger RAGAS evaluation on a single question/answer/contexts tuple."""
     import asyncio
-    ollama_url = os.environ.get("OLLAMA_URL", "http://ollama:11434")
+    ollama_url = os.environ.get("LLM_URL", os.environ.get("OLLAMA_URL", "http://tensorrt-llm:8000"))
     try:
         settings_path = _find_settings_yaml()
         with open(settings_path) as f:
             settings = yaml.safe_load(f)
         ragas_cfg = settings.get("ragas", {})
-        eval_model = ragas_cfg.get("eval_model", "qwen2.5:7b")
+        eval_model = ragas_cfg.get("eval_model", "qwen3-30b-a3b-instruct")
         embed_model = ragas_cfg.get("embed_model", "nomic-embed-text")
     except Exception:
-        eval_model = "qwen2.5:7b"
+        eval_model = "qwen3-30b-a3b-instruct"
         embed_model = "nomic-embed-text"
 
     db_path = _find_ragas_db()
@@ -1363,15 +1363,15 @@ async def batch_evaluate_ragas(req: RagasBatchRequest):
     if not pairs:
         raise HTTPException(status_code=400, detail="Dataset contains no Q/R pairs")
 
-    ollama_url = os.environ.get("OLLAMA_URL", "http://ollama:11434")
+    ollama_url = os.environ.get("LLM_URL", os.environ.get("OLLAMA_URL", "http://tensorrt-llm:8000"))
     agent_url = os.environ.get("AGENT_URL", "http://agent:8000")
     try:
         settings_path = _find_settings_yaml()
         with open(settings_path) as f:
             settings = yaml.safe_load(f)
-        eval_model = settings.get("ragas", {}).get("eval_model", "qwen2.5:7b")
+        eval_model = settings.get("ragas", {}).get("eval_model", "qwen3-30b-a3b-instruct")
     except Exception:
-        eval_model = "qwen2.5:7b"
+        eval_model = "qwen3-30b-a3b-instruct"
 
     db_path = _find_ragas_db()
 
@@ -1463,17 +1463,17 @@ async def evaluate_feedbacks_ragas():
     if not rows:
         return JSONResponse(content={"status": "completed", "total": 0, "evaluated": 0, "results": [], "message": "Aucun feedback negatif avec correction a evaluer"})
 
-    ollama_url = os.environ.get("OLLAMA_URL", "http://ollama:11434")
+    ollama_url = os.environ.get("LLM_URL", os.environ.get("OLLAMA_URL", "http://tensorrt-llm:8000"))
     agent_url = os.environ.get("AGENT_URL", "http://agent:8000")
     try:
         settings_path = _find_settings_yaml()
         with open(settings_path) as f:
             settings = yaml.safe_load(f)
         ragas_cfg = settings.get("ragas", {})
-        eval_model = ragas_cfg.get("eval_model", "qwen2.5:7b")
+        eval_model = ragas_cfg.get("eval_model", "qwen3-30b-a3b-instruct")
         embed_model = ragas_cfg.get("embed_model", "nomic-embed-text")
     except Exception:
-        eval_model = "qwen2.5:7b"
+        eval_model = "qwen3-30b-a3b-instruct"
         embed_model = "nomic-embed-text"
 
     db_path = _find_ragas_db()
@@ -1625,7 +1625,7 @@ def _build_ragas_analysis(results: list) -> dict:
         if not has_strict_prompt:
             actions.append("PROMPT : Ajouter une consigne stricte dans le system prompt. Exemple : 'Reponds UNIQUEMENT a partir des passages fournis. Si l'information n'est pas presente, indique-le explicitement.' (via Config UI > System Prompt)")
         if ":8b" in cur_model or ":7b" in cur_model:
-            actions.append(f"MODELE : Le modele actuel ({cur_model}) est un petit modele. Les modeles plus gros (14b+) hallucinent significativement moins. Tester qwen2.5:14b ou llama3.1:70b si le GPU le permet (via Config UI > Modeles Ollama).")
+            actions.append(f"MODELE : Le modele actuel ({cur_model}) est un petit modele. Les modeles plus gros (14b+) hallucinent significativement moins. Tester qwen2.5:14b ou llama3.1:70b si le GPU le permet (via Config UI > Modele LLM — lecture seule, modèle fixé au démarrage TensorRT-LLM).")
         actions.append(f"TEMPERATURE : Passer de {cur_temp} a {sug_temp} dans settings.yaml (section llm > temperature)")
         actions.append(f"RERANKER : Augmenter rerank_top_n de {cur_rerank_top} a {sug_rerank} pour classer plus de passages")
 

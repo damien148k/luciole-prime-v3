@@ -66,11 +66,14 @@ def load_watcher_config(config_path: str | None = None) -> WatcherConfig:
             raw_watcher["watched_paths"]
         )
 
-    # Règle '1 instance = 1 index' :
-    # Si INSTANCE_NAME est défini, on force la surveillance UNIQUEMENT sur
-    # /app/data/${INSTANCE_NAME}/ et on réaffecte cet index par défaut.
+    # Règle '1 instance = 1 index' OU multi-index :
+    # - Si INSTANCE_NAME est défini ET MULTI_INDEX_MODE=false → surveillance
+    #   uniquement sur /app/data/${INSTANCE_NAME}/ (comportement historique).
+    # - Si MULTI_INDEX_MODE=true → surveillance sur /app/data/ entier ;
+    #   l'index_name est dérivé du premier sous-dossier (via index_routing).
     instance_name = os.environ.get("INSTANCE_NAME", "").strip().lower() or None
-    if instance_name:
+    multi_index_mode = os.environ.get("MULTI_INDEX_MODE", "false").lower() == "true"
+    if instance_name and not multi_index_mode:
         instance_path = f"/app/data/{instance_name}"
         raw_watcher["watched_paths"] = [{
             "path": instance_path,
@@ -80,6 +83,17 @@ def load_watcher_config(config_path: str | None = None) -> WatcherConfig:
         raw_watcher["default_index_name"] = instance_name
         logger.info(
             f"🎯 Mode mono-instance : watcher contraint à '{instance_path}' → index '{instance_name}'"
+        )
+    elif instance_name and multi_index_mode:
+        instance_path = "/app/data"
+        raw_watcher["watched_paths"] = [{
+            "path": instance_path,
+            "recursive": True,
+            "index_name": None,
+        }]
+        raw_watcher["default_index_name"] = instance_name
+        logger.info(
+            f"🎯 Mode multi-index : watcher surveille '{instance_path}' — index déduit du sous-dossier"
         )
 
     config = WatcherConfig(**raw_watcher)

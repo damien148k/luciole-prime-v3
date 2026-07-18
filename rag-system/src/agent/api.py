@@ -111,20 +111,26 @@ _config = None
 # Si INSTANCE_NAME est défini dans l'environnement, l'agent ignore tout
 # paramètre `index_name` reçu et force systématiquement cette valeur.
 # ============================================================================
-INSTANCE_NAME = os.environ.get("INSTANCE_NAME", "").strip().lower() or None
+INSTANCE_NAME = os.environ.get("INSTANCE_NAME", "")
+MULTI_INDEX_MODE = os.environ.get("MULTI_INDEX_MODE", "false").lower() == "true"
 if INSTANCE_NAME:
-    logger.info(f"🎯 INSTANCE_NAME défini : '{INSTANCE_NAME}' — index forcé pour toutes les requêtes")
+    if MULTI_INDEX_MODE:
+        logger.info(f"🎯 INSTANCE_NAME défini : '{INSTANCE_NAME}' — multi-index activé (MULTI_INDEX_MODE=true)")
+    else:
+        logger.info(f"🎯 INSTANCE_NAME défini : '{INSTANCE_NAME}' — index forcé pour toutes les requêtes")
 
 
 def _resolve_index_name(requested: Optional[str]) -> str:
     """
     Résout l'index_name effectif selon la règle '1 instance = 1 index'.
 
-    - Si INSTANCE_NAME est défini (env var), on l'utilise toujours (le paramètre
-      reçu de l'UI ou du client API est ignoré).
+    - Si INSTANCE_NAME est défini ET MULTI_INDEX_MODE=false, on force toujours
+      INSTANCE_NAME (le paramètre reçu de l'UI est ignoré).
+    - Si MULTI_INDEX_MODE=true, on utilise le paramètre reçu (ou INSTANCE_NAME
+      en fallback si aucun index n'est spécifié).
     - Sinon, on garde le comportement historique (param reçu, ou fallback config).
     """
-    if INSTANCE_NAME:
+    if INSTANCE_NAME and not MULTI_INDEX_MODE:
         if requested and requested != INSTANCE_NAME:
             logger.debug(
                 f"index_name '{requested}' reçu mais ignoré — "
@@ -133,6 +139,8 @@ def _resolve_index_name(requested: Optional[str]) -> str:
         return INSTANCE_NAME
     if requested:
         return requested
+    if INSTANCE_NAME:
+        return INSTANCE_NAME
     return _get_config()["qdrant"]["collection_name"]
 
 
@@ -162,10 +170,10 @@ def _get_config():
             _config["opensearch"]["port"] = parsed.port or 9200
             logger.info(f"OpenSearch config from env: {_config['opensearch']['host']}:{_config['opensearch']['port']}")
         
-        ollama_host = os.environ.get("OLLAMA_HOST")
-        if ollama_host:
-            _config["llm"]["base_url"] = ollama_host
-            logger.info(f"Ollama config from env: {ollama_host}")
+        llm_url = os.environ.get("LLM_URL") or os.environ.get("OLLAMA_HOST")
+        if llm_url:
+            _config["llm"]["base_url"] = llm_url
+            logger.info(f"LLM URL config from env: {llm_url}")
     
     return _config
 
@@ -482,7 +490,7 @@ async def get_instance_info():
     """
     return {
         "instance_name": INSTANCE_NAME,
-        "single_index_mode": bool(INSTANCE_NAME),
+        "single_index_mode": bool(INSTANCE_NAME) and not MULTI_INDEX_MODE,
     }
 
 
@@ -501,7 +509,7 @@ async def list_indexes():
         config = _get_config()
 
         # Mode mono-index : on retourne uniquement l'instance courante
-        if INSTANCE_NAME:
+        if INSTANCE_NAME and not MULTI_INDEX_MODE:
             return {
                 "indexes": [{
                     "name": INSTANCE_NAME,
@@ -511,7 +519,7 @@ async def list_indexes():
                 }],
                 "default": INSTANCE_NAME,
                 "instance_name": INSTANCE_NAME,
-                "single_index_mode": True,
+                "single_index_mode": not MULTI_INDEX_MODE,
             }
 
         indexes = []
@@ -571,7 +579,7 @@ async def list_indexes():
             "indexes": [],
             "default": None,
             "instance_name": INSTANCE_NAME,
-            "single_index_mode": bool(INSTANCE_NAME),
+            "single_index_mode": bool(INSTANCE_NAME) and not MULTI_INDEX_MODE,
             "error": str(e)
         }
 
@@ -1088,214 +1096,37 @@ async def submit_feedback(fb: FeedbackSubmit):
 
 
 # ============================================================================
-# Ollama Model Management
+# Modèle LLM actif (lecture seule) — TensorRT-LLM
 # ============================================================================
+# TensorRT-LLM ne supporte pas le changement de modèle à chaud.
+# Le modèle est fixé au lancement du container (Qwen3-30B-A3B-Instruct NVFP4).
+# Les anciennes routes Ollama (pull/activate/delete/search) ont été supprimées.
 
-def _get_ollama_base_url() -> str:
+@app.get("/api/llm/model")
+async def get_active_llm_model():
+    """
+    Retourne le modèle LLM actif et l'URL du backend TensorRT-LLM.
+
+    Le modèle est fixé au démarrage du container ; aucun pull/delete dynamique
+    n'est possible avec TensorRT-LLM.
+    """
     config = _get_config()
-    url = os.environ.get("OLLAMA_URL") or config.get("llm", {}).get("base_url", "http://ollama:11434")
-    return url.rstrip("/")
-
-
-@app.get("/api/ollama/models")
-async def list_ollama_models():
-    """Liste les modeles installes dans Ollama avec details (famille, params, quantisation)."""
-    base_url = _get_ollama_base_url()
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(f"{base_url}/api/tags")
-            resp.raise_for_status()
-            data = resp.json()
-
-            config = _get_config()
-            active_model = config.get("llm", {}).get("model", "")
-
-            models = []
-            for m in data.get("models", []):
-                name = m.get("name", "")
-                entry = {
-                    "name": name,
-                    "size_mb": round(m.get("size", 0) / 1e6),
-                    "modified_at": m.get("modified_at", ""),
-                    "digest": m.get("digest", "")[:12],
-                    "active": name == active_model,
-                    "family": "",
-                    "parameter_size": "",
-                    "quantization": "",
-                    "context_length": 0,
-                }
-                try:
-                    show_resp = await client.post(f"{base_url}/api/show", json={"name": name})
-                    if show_resp.status_code == 200:
-                        show_data = show_resp.json()
-                        details = show_data.get("details", {})
-                        entry["family"] = details.get("family", "")
-                        entry["parameter_size"] = details.get("parameter_size", "")
-                        entry["quantization"] = details.get("quantization_level", "")
-                        model_info = show_data.get("model_info", {})
-                        for key, val in model_info.items():
-                            if key.endswith(".context_length"):
-                                entry["context_length"] = int(val)
-                                break
-                except Exception:
-                    pass
-                models.append(entry)
-
-        return {"models": models, "active_model": active_model}
-    except Exception as e:
-        logger.error(f"Ollama list error: {e}")
-        raise HTTPException(status_code=502, detail=f"Erreur communication Ollama: {e}")
-
-
-@app.post("/api/ollama/pull")
-async def pull_ollama_model(request: dict):
-    """Telecharge un modele Ollama avec streaming de la progression."""
-    model_name = request.get("model", "").strip()
-    if not model_name:
-        raise HTTPException(status_code=400, detail="Nom du modele requis")
-
-    base_url = _get_ollama_base_url()
-    logger.info(f"Pulling Ollama model: {model_name}")
-
-    async def stream_pull():
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30, read=3600, write=30, pool=30)) as client:
-                async with client.stream("POST", f"{base_url}/api/pull", json={"name": model_name}) as resp:
-                    if resp.status_code != 200:
-                        body = await resp.aread()
-                        yield f"data: {json.dumps({'error': body.decode()})}\n\n"
-                        return
-                    async for line in resp.aiter_lines():
-                        if line.strip():
-                            try:
-                                progress = json.loads(line)
-                                total = progress.get("total", 0)
-                                completed = progress.get("completed", 0)
-                                status = progress.get("status", "")
-                                pct = int(completed / total * 100) if total > 0 else 0
-                                yield f"data: {json.dumps({'status': status, 'pct': pct, 'completed_mb': round(completed/1e6), 'total_mb': round(total/1e6)})}\n\n"
-                            except json.JSONDecodeError:
-                                pass
-            yield f"data: {json.dumps({'status': 'done', 'pct': 100})}\n\n"
-        except Exception as e:
-            logger.error(f"Ollama pull error: {e}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-    return StreamingResponse(stream_pull(), media_type="text/event-stream")
-
-
-class OllamaActivateRequest(BaseModel):
-    model: str
-    num_ctx: int = 8192
-    max_tokens: int = 4096
-
-
-@app.post("/api/ollama/activate")
-async def activate_ollama_model(request: OllamaActivateRequest):
-    """Active un modele: met a jour settings.yaml et recharge la config."""
-    config_path = os.environ.get("CONFIG_PATH", "config/settings.yaml")
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            raw = f.read()
-            settings = yaml.safe_load(raw)
-
-        old_model = settings.get("llm", {}).get("model", "")
-        settings["llm"]["model"] = request.model
-        settings["llm"]["num_ctx"] = request.num_ctx
-        settings["llm"]["max_tokens"] = request.max_tokens
-
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump(settings, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-
-        logger.info(f"LLM model changed: {old_model} -> {request.model} (num_ctx={request.num_ctx})")
-
-        result = await reload_config()
-        return {
-            "status": "ok",
-            "old_model": old_model,
-            "new_model": request.model,
-            "num_ctx": request.num_ctx,
-            "max_tokens": request.max_tokens,
-            "reload": result,
-        }
-    except Exception as e:
-        logger.error(f"Activate model error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/ollama/search")
-async def search_ollama_registry(q: str = ""):
-    """Recherche de modeles sur ollama.com (scraping HTML)."""
-    query = q.strip()
-    if not query:
-        return {"models": [], "error": "Parametre q requis"}
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(
-                f"https://ollama.com/search?q={query}",
-                headers={"User-Agent": "Luciole/3.0"}
-            )
-            resp.raise_for_status()
-            html = resp.text
-
-        models = []
-        items = re.split(r'<li\s+x-test-model', html)
-        for item in items[1:]:  # skip content before first <li>
-            name_match = re.search(r'x-test-search-response-title[^>]*>([^<]+)<', item)
-            desc_match = re.search(r'text-neutral-800[^>]*>([^<]+)<', item)
-            sizes = re.findall(r'x-test-size[^>]*>([^<]+)<', item)
-            pulls_match = re.search(r'Pulls', item)
-            pulls = ""
-            if pulls_match:
-                before = item[:pulls_match.start()]
-                num_match = re.search(r'>\s*([\d,.]+[KMB]?)\s*$', before)
-                if num_match:
-                    pulls = num_match.group(1).strip()
-
-            if name_match:
-                models.append({
-                    "name": name_match.group(1).strip(),
-                    "description": desc_match.group(1).strip() if desc_match else "",
-                    "tags": [s.strip() for s in sizes],
-                    "pulls": pulls,
-                })
-
-        return {"models": models, "query": query}
-    except httpx.ConnectError:
-        return {"models": [], "error": "Pas de connexion internet. Utilisez la saisie manuelle."}
-    except Exception as e:
-        logger.error(f"Ollama search error: {e}")
-        return {"models": [], "error": str(e)}
-
-
-@app.delete("/api/ollama/models")
-async def delete_ollama_model(request: dict):
-    """Supprime un modele Ollama. Refuse si c'est le modele actif."""
-    model_name = request.get("model", "").strip()
-    if not model_name:
-        raise HTTPException(status_code=400, detail="Nom du modele requis")
-
-    config = _get_config()
-    active_model = config.get("llm", {}).get("model", "")
-    if model_name == active_model:
-        raise HTTPException(status_code=409, detail=f"Impossible de supprimer le modele actif ({model_name}). Activez un autre modele d'abord.")
-
-    base_url = _get_ollama_base_url()
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.request("DELETE", f"{base_url}/api/delete", json={"name": model_name})
-            if resp.status_code != 200:
-                detail = resp.text or f"Ollama a retourne {resp.status_code}"
-                raise HTTPException(status_code=resp.status_code, detail=detail)
-        logger.info(f"Ollama model deleted: {model_name}")
-        return {"status": "ok", "deleted": model_name}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Ollama delete error: {e}")
-        raise HTTPException(status_code=502, detail=f"Erreur communication Ollama: {e}")
+    model_name = (
+        os.environ.get("SERVED_MODEL_NAME")
+        or config.get("llm", {}).get("model", "qwen3-30b-a3b-instruct")
+    )
+    llm_url = (
+        os.environ.get("LLM_URL")
+        or config.get("llm", {}).get("base_url", "http://tensorrt-llm:8000")
+    )
+    return {
+        "model": model_name,
+        "backend": "TensorRT-LLM 1.2 (NVFP4)",
+        "url": llm_url,
+        "dynamic_management": False,
+        "info": "Le modèle est fixé au lancement du container TensorRT-LLM. "
+                "Pour changer de modèle, relancez le container avec la nouvelle image/config.",
+    }
 
 
 # ============================================================================

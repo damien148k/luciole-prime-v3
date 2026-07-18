@@ -302,7 +302,7 @@ async def _trigger_ragas_on_negative(question: str, answer: str, sources_json: s
             logger.info("RAGAS auto-eval skipped: no contexts available")
             return
 
-        ollama_url = os.environ.get("OLLAMA_URL", "http://ollama:11434")
+        llm_url = os.environ.get("LLM_URL", os.environ.get("OLLAMA_URL", "http://tensorrt-llm:8000"))
         ragas_db = os.environ.get("RAGAS_DB_PATH", "/app/feedbacks/ragas.db")
 
         try:
@@ -312,18 +312,18 @@ async def _trigger_ragas_on_negative(question: str, answer: str, sources_json: s
                 with open(settings_path) as f:
                     _settings = _yaml.safe_load(f)
                 ragas_cfg = _settings.get("ragas", {})
-                eval_model = ragas_cfg.get("eval_model", "qwen2.5:7b")
+                eval_model = ragas_cfg.get("eval_model", "qwen3-30b-a3b-instruct")
                 embed_model = ragas_cfg.get("embed_model", "nomic-embed-text")
             else:
-                eval_model = "qwen2.5:7b"
+                eval_model = "qwen3-30b-a3b-instruct"
                 embed_model = "nomic-embed-text"
         except Exception:
-            eval_model = "qwen2.5:7b"
+            eval_model = "qwen3-30b-a3b-instruct"
             embed_model = "nomic-embed-text"
 
         from evaluation.ragas_evaluator import LucioleRAGASEvaluator
         evaluator = LucioleRAGASEvaluator(
-            ollama_url=ollama_url, model=eval_model, embed_model=embed_model, db_path=ragas_db
+            llm_url=llm_url, model=eval_model, embed_model=embed_model, db_path=ragas_db
         )
         loop = asyncio.get_event_loop()
         scores = await loop.run_in_executor(
@@ -495,78 +495,25 @@ async def export_feedbacks_csv():
 
 
 # ============================================================================
-# OLLAMA MODEL MANAGEMENT PROXY
+# MODÈLE LLM ACTIF (lecture seule) — TensorRT-LLM
 # ============================================================================
+# Les anciennes routes Ollama (pull/activate/delete/search) ont été supprimées.
+# TensorRT-LLM ne supporte pas la gestion de modèles à chaud.
 
-@app.get("/api/ollama/models")
-async def proxy_ollama_models():
-    """Proxy vers l'Agent API pour lister les modeles Ollama installes."""
+@app.get("/api/llm/model")
+async def proxy_llm_model():
+    """Proxy vers l'Agent API pour lire le modèle LLM actif (lecture seule)."""
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f"{AGENT_URL}/api/ollama/models")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{AGENT_URL}/api/llm/model")
             return resp.json()
     except Exception as e:
-        logger.error(f"Proxy ollama/models error: {e}")
-        return {"error": f"Erreur communication agent: {e}", "models": []}
-
-
-@app.post("/api/ollama/pull")
-async def proxy_ollama_pull(request: Request):
-    """Proxy SSE vers l'Agent API pour telecharger un modele Ollama."""
-    body = await request.json()
-
-    async def stream_proxy():
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30, read=3600, write=30, pool=30)) as client:
-                async with client.stream("POST", f"{AGENT_URL}/api/ollama/pull", json=body) as resp:
-                    async for line in resp.aiter_lines():
-                        if line.strip():
-                            yield line + "\n"
-        except Exception as e:
-            logger.error(f"Proxy ollama/pull error: {e}")
-            yield f"data: {{\"error\": \"{e}\"}}\n\n"
-
-    return StreamingResponse(stream_proxy(), media_type="text/event-stream")
-
-
-@app.post("/api/ollama/activate")
-async def proxy_ollama_activate(request: Request):
-    """Proxy vers l'Agent API pour activer un modele et mettre a jour settings.yaml."""
-    body = await request.json()
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(f"{AGENT_URL}/api/ollama/activate", json=body)
-            return resp.json()
-    except Exception as e:
-        logger.error(f"Proxy ollama/activate error: {e}")
-        return {"error": f"Erreur communication agent: {e}"}
-
-
-@app.delete("/api/ollama/models")
-async def proxy_ollama_delete(request: Request):
-    """Proxy vers l'Agent API pour supprimer un modele Ollama."""
-    body = await request.json()
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.request("DELETE", f"{AGENT_URL}/api/ollama/models", json=body)
-            if resp.status_code >= 400:
-                return {"error": resp.json().get("detail", resp.text)}
-            return resp.json()
-    except Exception as e:
-        logger.error(f"Proxy ollama/delete error: {e}")
-        return {"error": f"Erreur communication agent: {e}"}
-
-
-@app.get("/api/ollama/search")
-async def proxy_ollama_search(q: str = ""):
-    """Proxy vers l'Agent API pour rechercher des modeles sur ollama.com."""
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(f"{AGENT_URL}/api/ollama/search", params={"q": q})
-            return resp.json()
-    except Exception as e:
-        logger.error(f"Proxy ollama/search error: {e}")
-        return {"models": [], "error": f"Erreur communication agent: {e}"}
+        logger.error(f"Proxy llm/model error: {e}")
+        return {
+            "error": f"Erreur communication agent: {e}",
+            "model": "qwen3-30b-a3b-instruct",
+            "backend": "TensorRT-LLM 1.2 (NVFP4)",
+        }
 
 
 # ============================================================================
@@ -2305,7 +2252,7 @@ async def config_page():
         .toast-info { background: var(--accent); color: white; }
         @keyframes toastIn { from { opacity: 0; transform: translateX(100px); } to { opacity: 1; transform: translateX(0); } }
 
-        /* Ollama model management */
+        /* Panneau modèle LLM actif (lecture seule) */
         .models-panel {
             background: rgba(15, 34, 55, 0.6);
             backdrop-filter: blur(4px);
@@ -2512,40 +2459,15 @@ async def config_page():
         </div>
 
         <div class="models-panel" id="modelsPanel">
-            <h3>🤖 Modeles LLM (Ollama)</h3>
+            <h3>🤖 Modèle LLM actif — TensorRT-LLM NVFP4</h3>
             <div id="modelsContent">
                 <p style="color:var(--text-secondary);font-size:0.85rem;">Chargement...</p>
             </div>
-            <hr style="border-color:var(--border);margin:1rem 0;">
-            <h3>📥 Telecharger un nouveau modele</h3>
-            <div class="pull-form" style="margin-bottom:0.75rem;">
-                <input type="text" id="searchModelQuery" class="model-name" placeholder="Rechercher un modele (ex: llama, mistral, qwen, gemma...)" onkeydown="if(event.key==='Enter')searchModels()">
-                <button class="btn btn-primary" id="btnSearch" onclick="searchModels()">🔍 Rechercher</button>
-                <button class="btn btn-secondary" style="font-size:0.8rem;" onclick="toggleManualInput()">Saisie manuelle</button>
-            </div>
-            <div id="manualInputArea" style="display:none;margin-bottom:0.75rem;">
-                <div class="pull-form">
-                    <input type="text" id="pullModelName" class="model-name" placeholder="Nom exact: llama3.1:8b, mistral:7b...">
-                    <button class="btn btn-primary" id="btnPull" onclick="pullModel()">📥 Telecharger</button>
-                </div>
-            </div>
-            <div id="searchResults" style="display:none;margin-bottom:0.75rem;">
-                <table class="models-table" style="font-size:0.82rem;">
-                    <thead><tr><th>Modele</th><th>Description</th><th>Tailles</th><th>Popularite</th><th></th></tr></thead>
-                    <tbody id="searchResultsBody"></tbody>
-                </table>
-            </div>
-            <div id="tagSelector" style="display:none;margin-bottom:0.75rem;padding:0.75rem;background:var(--bg-tertiary);border-radius:8px;">
-                <span style="font-size:0.85rem;color:var(--text-secondary);">Choisir la taille pour <strong id="tagModelName"></strong> :</span>
-                <div id="tagButtons" style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.5rem;"></div>
-            </div>
-            <div class="progress-container" id="pullProgress">
-                <div class="progress-bar-bg">
-                    <div class="progress-bar-fill" id="pullProgressBar"></div>
-                    <div class="progress-text" id="pullProgressText">0%</div>
-                </div>
-                <div class="progress-status" id="pullStatus">En attente...</div>
-            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.75rem;">
+                Le modèle est fixé au lancement du container TensorRT-LLM.
+                La gestion dynamique (pull / delete / activation) n'est pas disponible avec TensorRT-LLM.
+                Pour changer de modèle, relancez le container avec la nouvelle image/configuration.
+            </p>
         </div>
 
         <div class="tabs" id="tabsContainer">
@@ -3205,14 +3127,14 @@ async def config_page():
             // Préremplissage avec les valeurs luciole-mail (Greenmail LAN)
             // Ports internes Greenmail : SMTP=3025, IMAP=3143 (dans le réseau Docker)
             document.getElementById('mpEnabled').checked   = true;
-            document.getElementById('mpImapHost').value    = 'luciole-mail-watcher';
+            document.getElementById('mpImapHost').value    = 'luciole-mail';
             document.getElementById('mpImapPort').value    = '3143';
             document.getElementById('mpImapSsl').value     = 'false';
             document.getElementById('mpImapUser').value    = 'luciole@local.lan';
             document.getElementById('mpImapPass').value    = 'luciole2024';
             document.getElementById('mpImapFolder').value  = 'INBOX';
             document.getElementById('mpPoll').value        = '60';
-            document.getElementById('mpSmtpHost').value    = 'luciole-mail-watcher';
+            document.getElementById('mpSmtpHost').value    = 'luciole-mail';
             document.getElementById('mpSmtpPort').value    = '3025';
             document.getElementById('mpSmtpTls').value     = 'false';
             document.getElementById('mpSmtpUser').value    = 'luciole@local.lan';
@@ -3272,270 +3194,46 @@ async def config_page():
             } catch(e) {}
         }
 
-        // ========== OLLAMA MODEL MANAGEMENT ==========
-
-        let ollamaModels = [];
+        // ========== MODÈLE LLM ACTIF (lecture seule) — TensorRT-LLM ==========
+        // La gestion dynamique Ollama (pull/activate/delete/search) a été supprimée.
+        // TensorRT-LLM ne supporte pas le changement de modèle à chaud.
 
         async function loadModels() {
             const container = document.getElementById('modelsContent');
             try {
-                const resp = await fetch('/api/ollama/models');
+                const resp = await fetch('/api/llm/model');
                 const data = await resp.json();
-                if (data.error) {
+                if (data.error && !data.model) {
                     container.innerHTML = `<p style="color:var(--error);font-size:0.85rem;">⚠️ ${data.error}</p>`;
                     return;
                 }
-                ollamaModels = data.models || [];
-                const activeModel = data.active_model || '';
-
-                if (ollamaModels.length === 0) {
-                    container.innerHTML = '<p style="color:var(--text-secondary);font-size:0.85rem;">Aucun modele installe dans Ollama.</p>';
-                    return;
-                }
-
-                let rows = ollamaModels.map(function(m) {
-                    const isActive = m.active;
-                    const badge = isActive ? ' <span class="badge-active">ACTIF</span>' : '';
-                    const details = [m.family, m.parameter_size, m.quantization].filter(Boolean).join(' · ');
-                    const detailsHtml = details ? `<div style="font-size:0.75rem;color:var(--text-secondary);margin-top:2px;">${details}</div>` : '';
-                    const ctxNative = m.context_length || 8192;
-                    const ctxDefault = ctxNative;
-                    const maxDefault = Math.min(Math.floor(ctxNative / 2), 4096);
-                    const ctxHint = m.context_length ? `title="Max natif: ${ctxNative}"` : '';
-                    const activateBtn = isActive
-                        ? '<span style="color:var(--success);font-size:0.8rem;">✓ Actif</span>'
-                        : `<div class="activate-form">
-                            <div class="param-group"><label ${ctxHint}>ctx</label><input type="number" value="${ctxDefault}" min="512" max="${ctxNative}" step="512" id="ctx-${CSS.escape(m.name)}"></div>
-                            <div class="param-group"><label>max</label><input type="number" value="${maxDefault}" min="256" step="256" id="max-${CSS.escape(m.name)}"></div>
-                            <button class="btn-sm btn-activate" onclick="activateModel('${m.name.replace(/'/g,"\\'")}')">Activer</button>
-                           </div>`;
-                    const deleteBtn = isActive
-                        ? ''
-                        : ` <button class="btn-sm" style="background:var(--error);color:white;margin-left:0.5rem;" onclick="deleteModel('${m.name.replace(/'/g,"\\'")}')">Supprimer</button>`;
-                    return `<tr>
-                        <td>${m.name}${badge}${detailsHtml}</td>
-                        <td>${m.size_mb} Mo</td>
-                        <td style="font-size:0.8rem;color:var(--text-secondary);">${m.modified_at ? new Date(m.modified_at).toLocaleDateString('fr-FR') : '-'}</td>
-                        <td>${activateBtn}${deleteBtn}</td>
-                    </tr>`;
-                }).join('');
-
+                const model = data.model || 'qwen3-30b-a3b-instruct';
+                const backend = data.backend || 'TensorRT-LLM 1.2 (NVFP4)';
+                const url = data.url || 'http://tensorrt-llm:8000';
                 container.innerHTML = `
                     <table class="models-table">
-                        <thead><tr><th>Modele</th><th>Taille</th><th>Date</th><th>Action</th></tr></thead>
-                        <tbody>${rows}</tbody>
+                        <thead><tr><th>Modèle</th><th>Backend</th><th>URL</th><th>Statut</th></tr></thead>
+                        <tbody><tr>
+                            <td><strong>${model}</strong> <span class="badge-active">ACTIF</span></td>
+                            <td style="font-size:0.85rem;">${backend}</td>
+                            <td style="font-size:0.8rem;color:var(--text-secondary);">${url}</td>
+                            <td style="font-size:0.8rem;color:var(--success);">Fixé au démarrage</td>
+                        </tr></tbody>
                     </table>`;
             } catch (e) {
                 container.innerHTML = `<p style="color:var(--error);font-size:0.85rem;">⚠️ Impossible de contacter l'agent: ${e}</p>`;
             }
         }
 
-        async function activateModel(modelName) {
-            const ctxInput = document.getElementById('ctx-' + CSS.escape(modelName));
-            const maxInput = document.getElementById('max-' + CSS.escape(modelName));
-            const numCtx = ctxInput ? parseInt(ctxInput.value) || 8192 : 8192;
-            const maxTokens = maxInput ? parseInt(maxInput.value) || 4096 : 4096;
+        // Fonctions supprimées (non applicables avec TensorRT-LLM) :
+        // activateModel, deleteModel, pullModel, searchModels, showTagSelector, startPull, toggleManualInput
 
-            if (!confirm(`Activer le modele "${modelName}" ?\n\nContexte: ${numCtx} tokens\nMax reponse: ${maxTokens} tokens\n\nLa configuration sera mise a jour et rechargee.`)) return;
+        // Placeholder pour les appels internes à loadModels() depuis d'autres fonctions
+        // (le rechargement de la liste reste possible car l'endpoint /api/llm/model est read-only)
 
-            showToast('⏳ Activation en cours...', 'info');
-            try {
-                const resp = await fetch('/api/ollama/activate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: modelName, num_ctx: numCtx, max_tokens: maxTokens })
-                });
-                const data = await resp.json();
-                if (data.error) {
-                    showToast('❌ ' + data.error, 'error');
-                } else {
-                    showToast(`✅ Modele active: ${modelName}`, 'success');
-                    await loadModels();
-                    await loadFile('settings.yaml');
-                }
-            } catch (e) {
-                showToast('❌ Erreur: ' + e, 'error');
-            }
-        }
-
-        function toggleManualInput() {
-            const area = document.getElementById('manualInputArea');
-            area.style.display = area.style.display === 'none' ? 'block' : 'none';
-        }
-
-        async function searchModels() {
-            const query = document.getElementById('searchModelQuery').value.trim();
-            if (!query) { showToast('Entrez un terme de recherche', 'error'); return; }
-
-            const btn = document.getElementById('btnSearch');
-            btn.disabled = true;
-            btn.textContent = '⏳ Recherche...';
-            document.getElementById('searchResults').style.display = 'none';
-            document.getElementById('tagSelector').style.display = 'none';
-
-            try {
-                const resp = await fetch(`/api/ollama/search?q=${encodeURIComponent(query)}`);
-                const data = await resp.json();
-
-                if (data.error) {
-                    showToast('⚠️ ' + data.error, 'error');
-                    btn.disabled = false;
-                    btn.textContent = '🔍 Rechercher';
-                    return;
-                }
-
-                const results = data.models || [];
-                const tbody = document.getElementById('searchResultsBody');
-
-                if (results.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);">Aucun modele trouve</td></tr>';
-                } else {
-                    tbody.innerHTML = results.map(function(m) {
-                        const tagsHtml = m.tags.map(function(t) {
-                            return '<span style="background:var(--accent-dim);color:var(--accent);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.75rem;margin:1px;">' + t + '</span>';
-                        }).join(' ');
-                        const desc = m.description.length > 80 ? m.description.substring(0, 80) + '...' : m.description;
-                        const escapedName = m.name.replace(/'/g, "\\'");
-                        const escapedTags = JSON.stringify(m.tags).replace(/'/g, "\\'");
-                        return '<tr>' +
-                            '<td style="font-weight:500;">' + m.name + '</td>' +
-                            '<td style="font-size:0.8rem;color:var(--text-secondary);max-width:250px;">' + desc + '</td>' +
-                            '<td>' + tagsHtml + '</td>' +
-                            '<td style="font-size:0.8rem;color:var(--text-secondary);">' + (m.pulls || '-') + '</td>' +
-                            '<td><button class="btn-sm btn-activate" onclick="showTagSelector(\'' + escapedName + '\',' + escapedTags + ')">Choisir</button></td>' +
-                            '</tr>';
-                    }).join('');
-                }
-
-                document.getElementById('searchResults').style.display = 'block';
-            } catch (e) {
-                showToast('❌ Erreur: ' + e, 'error');
-            }
-
-            btn.disabled = false;
-            btn.textContent = '🔍 Rechercher';
-        }
-
-        function showTagSelector(modelName, tags) {
-            document.getElementById('tagModelName').textContent = modelName;
-            const container = document.getElementById('tagButtons');
-
-            if (!tags || tags.length === 0) {
-                container.innerHTML = '<button class="btn-sm btn-activate" onclick="startPull(\'' + modelName.replace(/'/g, "\\'") + '\')">Telecharger (latest)</button>';
-            } else {
-                container.innerHTML = tags.map(function(tag) {
-                    const fullName = modelName + ':' + tag;
-                    return '<button class="btn-sm btn-activate" style="padding:0.4rem 0.8rem;" onclick="startPull(\'' + fullName.replace(/'/g, "\\'") + '\')">' + tag + '</button>';
-                }).join('') +
-                '<button class="btn-sm" style="background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);padding:0.4rem 0.8rem;" onclick="startPull(\'' + modelName.replace(/'/g, "\\'") + '\')">latest</button>';
-            }
-
-            document.getElementById('tagSelector').style.display = 'block';
-        }
-
-        function startPull(fullModelName) {
-            document.getElementById('tagSelector').style.display = 'none';
-            document.getElementById('pullModelName').value = fullModelName;
-            document.getElementById('manualInputArea').style.display = 'block';
-            pullModel();
-        }
-
-        async function deleteModel(modelName) {
-            if (!confirm(`Supprimer le modele "${modelName}" ?\n\nCette action est irreversible.`)) return;
-            showToast('⏳ Suppression en cours...', 'info');
-            try {
-                const resp = await fetch('/api/ollama/models', {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: modelName })
-                });
-                const data = await resp.json();
-                if (data.error) {
-                    showToast('❌ ' + data.error, 'error');
-                } else {
-                    showToast(`✅ Modele "${modelName}" supprime`, 'success');
-                    await loadModels();
-                }
-            } catch (e) {
-                showToast('❌ Erreur: ' + e, 'error');
-            }
-        }
-
-        async function pullModel() {
-            const input = document.getElementById('pullModelName');
-            const modelName = input.value.trim();
-            if (!modelName) { showToast('Entrez un nom de modele', 'error'); return; }
-
-            const btn = document.getElementById('btnPull');
-            const progressContainer = document.getElementById('pullProgress');
-            const progressBar = document.getElementById('pullProgressBar');
-            const progressText = document.getElementById('pullProgressText');
-            const statusEl = document.getElementById('pullStatus');
-
-            btn.disabled = true;
-            btn.textContent = '⏳ Telechargement...';
-            progressContainer.classList.add('visible');
-            progressBar.style.width = '0%';
-            progressText.textContent = '0%';
-            statusEl.textContent = 'Connexion a Ollama...';
-
-            try {
-                const resp = await fetch('/api/ollama/pull', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: modelName })
-                });
-
-                const reader = resp.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (!line.startsWith('data: ')) continue;
-                        try {
-                            const evt = JSON.parse(line.slice(6));
-                            if (evt.error) {
-                                showToast('❌ ' + evt.error, 'error');
-                                statusEl.textContent = 'Erreur: ' + evt.error;
-                                btn.disabled = false;
-                                btn.textContent = '📥 Telecharger';
-                                return;
-                            }
-                            const pct = evt.pct || 0;
-                            progressBar.style.width = pct + '%';
-                            progressText.textContent = pct + '%';
-                            let detail = evt.status || '';
-                            if (evt.total_mb > 0) detail += ` (${evt.completed_mb}/${evt.total_mb} Mo)`;
-                            statusEl.textContent = detail;
-
-                            if (evt.status === 'done') {
-                                progressBar.style.width = '100%';
-                                progressText.textContent = '100%';
-                                statusEl.textContent = 'Telechargement termine !';
-                                showToast(`✅ Modele "${modelName}" telecharge avec succes`, 'success');
-                            }
-                        } catch (e) { /* ignore parse errors */ }
-                    }
-                }
-
-                await loadModels();
-            } catch (e) {
-                showToast('❌ Erreur: ' + e, 'error');
-                statusEl.textContent = 'Erreur: ' + e;
-            }
-
-            btn.disabled = false;
-            btn.textContent = '📥 Telecharger';
-        }
-
+        // Fin du bloc modèle LLM
+        // ----- (anciens blocs pull/activate/delete supprimés) -----
+        // dummy bloc pour conserver la structure du code existant :
         init();
         loadModels();
     </script>

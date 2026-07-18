@@ -2,7 +2,8 @@
 """
 LLM Generator — Génération de réponses via API OpenAI-compatible
 
-V4 : API générique OpenAI-compatible (Ollama, vLLM, TensorRT-LLM, LM Studio…)
+V5 : TensorRT-LLM 1.2 backend PyTorch (Qwen3-30B-A3B-Instruct-2507 NVFP4, GX10)
+     API OpenAI-compatible exposée par Triton Inference Server + TRT-LLM backend.
      Base URL et model lus depuis settings.yaml ou variable d'env LLM_URL.
 """
 
@@ -24,8 +25,9 @@ except ImportError:
 
 class LLMGenerator:
     """
-    Générateur de réponses LLM via API OpenAI-compatible (v4).
-    Compatible : Ollama, TensorRT-LLM, vLLM, LM Studio, OpenAI.
+    Générateur de réponses LLM via API OpenAI-compatible (v5).
+    Backend : TensorRT-LLM 1.2 (Qwen3-30B-A3B-Instruct-2507 NVFP4) via trtllm-serve.
+    Compatible aussi : vLLM, Ollama, LM Studio, OpenAI (fallback).
     """
 
     def __init__(self, config_path: str = None):
@@ -33,7 +35,9 @@ class LLMGenerator:
             config_path = os.environ.get("CONFIG_PATH", "config/settings.yaml")
         self._load_llm_config(config_path)
         self._load_prompts_config()
-        logger.info(f"LLMGenerator v4: model={self.model}, base_url={self.base_url}")
+        logger.info(
+            f"LLMGenerator v5 [TensorRT-LLM]: model={self.model}, base_url={self.base_url}"
+        )
 
     def _load_llm_config(self, config_path: str):
         try:
@@ -44,19 +48,23 @@ class LLMGenerator:
             config = {}
 
         llm_config = config.get("llm", {})
+
+        # Priorité : variable d'env > settings.yaml > défaut TensorRT-LLM
         env_url = (
             os.environ.get("LLM_URL")
-            or os.environ.get("OLLAMA_URL")
-            or os.environ.get("OLLAMA_HOST")
+            or os.environ.get("TRT_LLM_URL")
+            or os.environ.get("TRITON_URL")
         )
-        yaml_url = llm_config.get("base_url", "http://ollama:11434")
+        yaml_url = llm_config.get("base_url", "http://tensorrt-llm:8000")
         base = env_url if env_url else yaml_url
         self.base_url = base if base.endswith("/v1") else f"{base}/v1"
 
-        self.model       = llm_config.get("model",       "qwen2.5:14b-instruct-q4_K_M")
-        self.temperature = llm_config.get("temperature",  0.3)
+        # Nom du modèle exposé par le serveur TRT-LLM (= SERVED_MODEL_NAME)
+        self.model       = llm_config.get("model",       "qwen3-30b-a3b-instruct")
+        self.temperature = llm_config.get("temperature",  0.1)
         self.max_tokens  = llm_config.get("max_tokens",   4096)
         self.timeout     = llm_config.get("timeout",      300)
+        # num_ctx non requis par TRT-LLM (context window compilée au build time)
         self.num_ctx     = llm_config.get("num_ctx",      32768)
 
     def _load_prompts_config(self):
@@ -80,7 +88,7 @@ class LLMGenerator:
         ]
         return self._call_llm(messages)
 
-    # Alias rétrocompatible (déprécié — sera supprimé en v5)
+    # Alias rétrocompatible (déprécié — sera supprimé en v6)
     def _call_ollama(self, system_prompt: str, prompt: str) -> str:
         logger.warning("_call_ollama() est déprécié — utiliser call_llm()")
         return self.call_llm(system_prompt, prompt)
@@ -126,12 +134,13 @@ class LLMGenerator:
     # =========================================================================
 
     def health_check(self) -> bool:
+        """Vérifie que TensorRT-LLM / Triton répond sur /v1/models."""
         try:
-            with httpx.Client(timeout=5.0) as client:
+            with httpx.Client(timeout=10.0) as client:
                 r = client.get(f"{self.base_url}/models")
                 return r.status_code == 200
         except Exception as e:
-            logger.warning(f"LLM health check failed: {e}")
+            logger.warning(f"TRT-LLM health check failed: {e}")
             return False
 
     # =========================================================================
@@ -139,7 +148,7 @@ class LLMGenerator:
     # =========================================================================
 
     def _call_llm(self, messages: list) -> str:
-        """HTTP POST vers /v1/chat/completions (standard OpenAI)."""
+        """HTTP POST vers /v1/chat/completions (standard OpenAI / TRT-LLM)."""
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model":       self.model,
@@ -154,11 +163,15 @@ class LLMGenerator:
                 r.raise_for_status()
                 return r.json()["choices"][0]["message"]["content"]
         except httpx.TimeoutException:
-            raise RuntimeError(f"LLM timeout ({self.timeout}s) — vérifiez qu'un modèle est chargé.")
+            raise RuntimeError(
+                f"TRT-LLM timeout ({self.timeout}s) — vérifiez que le moteur est chargé."
+            )
         except httpx.ConnectError:
-            raise RuntimeError(f"LLM inaccessible ({self.base_url}) — vérifiez que le service est démarré.")
+            raise RuntimeError(
+                f"TRT-LLM inaccessible ({self.base_url}) — vérifiez que le service Triton est démarré."
+            )
         except Exception as e:
-            logger.error(f"Erreur API LLM: {e}")
+            logger.error(f"Erreur API TRT-LLM: {e}")
             raise
 
     # =========================================================================

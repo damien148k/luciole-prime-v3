@@ -4,7 +4,7 @@ Classificateur d'emails — Module mail Luciole Prime.
 Classification en deux passes :
   1. Règles déterministes (rapide, sans LLM) — détection spam, auto-reply,
      domaines bloqués, mots-clés sensibles.
-  2. Classification LLM via Ollama (optionnelle, fallback sur règles si KO).
+  2. Classification LLM via TensorRT-LLM (optionnelle, fallback sur règles si KO).
 
 La décision de routage tient compte de la catégorie, des scores
 et des paramètres de politique configurés par l'admin.
@@ -19,7 +19,7 @@ from typing import Optional
 import httpx
 from loguru import logger
 
-from .config import OLLAMA_URL
+from .config import LLM_URL
 from .constants import (
     DEFAULT_SENSITIVE_KEYWORDS,
     MAX_REPLY_PER_THREAD_PER_HOUR,
@@ -33,7 +33,7 @@ class EmailClassifier:
     """
     Classifie un email entrant et produit une décision de routage.
 
-    La classification LLM est optionnelle : si Ollama est indisponible
+    La classification LLM est optionnelle : si TensorRT-LLM est indisponible
     ou si le résultat est invalide, les règles déterministes prennent
     le relais avec confidence=0.5 (forçant le brouillon en V1).
     """
@@ -229,21 +229,21 @@ JSON attendu (et rien d'autre) :
 
     def _llm_classify(self, email: ParsedEmail) -> Optional[ClassificationResult]:
         """
-        Appel Ollama pour classification.
+        Appel TensorRT-LLM pour classification (API OpenAI-compatible).
 
         Retourne None si l'appel échoue ou si le JSON est invalide.
-        Timeout court (15s) pour ne pas bloquer le pipeline.
+        Timeout court pour ne pas bloquer le pipeline.
         """
         try:
-            # Récupérer le modèle configuré (fallback sur qwen2.5:7b)
+            # Récupérer le modèle configuré (fallback sur qwen3-30b-a3b-instruct)
             from .config import AGENT_URL
             try:
                 import yaml
                 with open("/app/config/settings.yaml") as f:
                     cfg = yaml.safe_load(f)
-                model = cfg.get("llm", {}).get("model", "qwen2.5:7b")
+                model = cfg.get("llm", {}).get("model", "qwen3-30b-a3b-instruct")
             except Exception:
-                model = "qwen2.5:7b"
+                model = "qwen3-30b-a3b-instruct"
 
             body_excerpt = (email.body_text or "")[:800]
             prompt = self._CLASSIFICATION_PROMPT.format(
@@ -255,13 +255,14 @@ JSON attendu (et rien d'autre) :
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"temperature": 0.1, "num_predict": 200},
+                "temperature": 0.1,
+                "max_tokens": 200,
             }
 
-            with httpx.Client(timeout=90.0) as client:   # 90s — cold start modèle inclus
-                resp = client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+            with httpx.Client(timeout=90.0) as client:   # 90s — démarrage container inclus
+                resp = client.post(f"{LLM_URL}/v1/chat/completions", json=payload)
                 resp.raise_for_status()
-                content = resp.json()["message"]["content"].strip()
+                content = resp.json()["choices"][0]["message"]["content"].strip()
 
             # Extraire le JSON (parfois le LLM ajoute du texte autour)
             match = re.search(r"\{[^}]+\}", content, re.DOTALL)
@@ -286,7 +287,7 @@ JSON attendu (et rien d'autre) :
             )
 
         except (httpx.TimeoutException, httpx.ConnectError):
-            logger.warning("Classification LLM : Ollama indisponible (timeout)")
+            logger.warning("Classification LLM : TensorRT-LLM indisponible (timeout)")
             return None
         except Exception as e:
             logger.warning(f"Classification LLM échouée : {e}")

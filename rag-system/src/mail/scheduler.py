@@ -30,8 +30,8 @@ async def start_scheduler():
     _running = True
     logger.info("Scheduler mail démarré")
 
-    # Attendre 90s au démarrage pour laisser Ollama charger le modèle LLM
-    logger.info("Scheduler mail : attente 90s (chargement modèle Ollama)...")
+    # Attendre 90s au démarrage pour laisser TensorRT-LLM charger le modèle LLM
+    logger.info("Scheduler mail : attente 90s (chargement modèle LLM, TensorRT-LLM)...")
     await asyncio.sleep(90)
     logger.info("Scheduler mail : démarrage du polling IMAP")
 
