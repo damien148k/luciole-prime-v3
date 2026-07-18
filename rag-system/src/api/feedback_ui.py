@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime
 from fastapi import FastAPI, Request, Query, Form, Response
-from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -495,25 +495,116 @@ async def export_feedbacks_csv():
 
 
 # ============================================================================
-# MODÈLE LLM ACTIF (lecture seule) — TensorRT-LLM
+# MODÈLE LLM ACTIF + gestion dynamique (Ollama / LM Studio)
 # ============================================================================
-# Les anciennes routes Ollama (pull/activate/delete/search) ont été supprimées.
-# TensorRT-LLM ne supporte pas la gestion de modèles à chaud.
+# Ces proxies transfèrent vers l'Agent API. La gestion dynamique n'est active
+# que si le backend le supporte (Ollama/LM Studio) ; sur TensorRT-LLM l'agent
+# renvoie HTTP 501, transféré tel quel à l'UI.
 
 @app.get("/api/llm/model")
 async def proxy_llm_model():
-    """Proxy vers l'Agent API pour lire le modèle LLM actif (lecture seule)."""
+    """Proxy vers l'Agent API pour lire le modèle LLM actif + capacités backend."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{AGENT_URL}/api/llm/model")
-            return resp.json()
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
     except Exception as e:
         logger.error(f"Proxy llm/model error: {e}")
         return {
             "error": f"Erreur communication agent: {e}",
             "model": "qwen3-30b-a3b-instruct",
-            "backend": "TensorRT-LLM 1.2 (NVFP4)",
+            "backend": "tensorrt-llm",
+            "supports_hot_swap": False,
         }
+
+
+@app.get("/api/ollama/models")
+async def proxy_ollama_models():
+    """Proxy : liste des modèles installés."""
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(f"{AGENT_URL}/api/ollama/models")
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except Exception as e:
+        logger.error(f"Proxy ollama/models error: {e}")
+        return JSONResponse(status_code=502, content={"error": f"Erreur communication agent: {e}"})
+
+
+@app.post("/api/ollama/pull")
+async def proxy_ollama_pull(request: Request):
+    """Proxy : téléchargement d'un modèle (SSE relayé)."""
+    body = await request.body()
+
+    async def relay():
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=30, read=3600, write=30, pool=30)
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    f"{AGENT_URL}/api/ollama/pull",
+                    content=body,
+                    headers={"Content-Type": "application/json"},
+                ) as resp:
+                    if resp.status_code != 200:
+                        detail = await resp.aread()
+                        yield f"data: {json.dumps({'error': detail.decode()})}\n\n"
+                        return
+                    async for chunk in resp.aiter_raw():
+                        if chunk:
+                            yield chunk.decode(errors="ignore")
+        except Exception as e:
+            logger.error(f"Proxy ollama/pull error: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(relay(), media_type="text/event-stream")
+
+
+@app.post("/api/ollama/activate")
+async def proxy_ollama_activate(request: Request):
+    """Proxy : activation d'un modèle installé."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{AGENT_URL}/api/ollama/activate",
+                content=body,
+                headers={"Content-Type": "application/json"},
+            )
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except Exception as e:
+        logger.error(f"Proxy ollama/activate error: {e}")
+        return JSONResponse(status_code=502, content={"error": f"Erreur communication agent: {e}"})
+
+
+@app.get("/api/ollama/search")
+async def proxy_ollama_search(q: str = ""):
+    """Proxy : recherche sur le registre ollama.com."""
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(f"{AGENT_URL}/api/ollama/search", params={"q": q})
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except Exception as e:
+        logger.error(f"Proxy ollama/search error: {e}")
+        return JSONResponse(status_code=502, content={"error": f"Erreur communication agent: {e}"})
+
+
+@app.delete("/api/ollama/models")
+async def proxy_ollama_delete(request: Request):
+    """Proxy : suppression d'un modèle installé."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.request(
+                "DELETE",
+                f"{AGENT_URL}/api/ollama/models",
+                content=body,
+                headers={"Content-Type": "application/json"},
+            )
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except Exception as e:
+        logger.error(f"Proxy ollama/delete error: {e}")
+        return JSONResponse(status_code=502, content={"error": f"Erreur communication agent: {e}"})
 
 
 # ============================================================================
@@ -2459,11 +2550,37 @@ async def config_page():
         </div>
 
         <div class="models-panel" id="modelsPanel">
-            <h3>🤖 Modèle LLM actif — TensorRT-LLM NVFP4</h3>
+            <h3 id="modelsPanelTitle">🤖 Modèle LLM actif</h3>
             <div id="modelsContent">
                 <p style="color:var(--text-secondary);font-size:0.85rem;">Chargement...</p>
             </div>
-            <p style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.75rem;">
+
+            <!-- Gestion dynamique (Ollama / LM Studio) — affichée seulement si hot-swap -->
+            <div id="ollamaControls" style="display:none;margin-top:1rem;">
+                <div class="pull-form">
+                    <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem;">➕ Installer un modèle</h4>
+                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+                        <input type="text" id="searchModelQuery" placeholder="Rechercher (ex: qwen, llama, mistral)…"
+                               style="flex:1;min-width:220px;padding:0.5rem;" onkeydown="if(event.key==='Enter')searchModels()">
+                        <button class="btn-sm" onclick="searchModels()">🔍 Rechercher</button>
+                        <button class="btn-sm" onclick="toggleManualInput()">✏️ Saisie manuelle</button>
+                    </div>
+                    <div id="manualInputArea" style="display:none;margin-top:0.5rem;">
+                        <input type="text" id="manualModelName" placeholder="nom:tag (ex: qwen3:8b)"
+                               style="width:60%;padding:0.5rem;">
+                        <button class="btn-sm btn-activate" onclick="pullModel(document.getElementById('manualModelName').value)">Télécharger</button>
+                    </div>
+                    <div id="searchResults" style="margin-top:0.5rem;"></div>
+                    <div id="tagSelector" style="display:none;margin-top:0.5rem;"></div>
+                    <div id="pullProgress" style="display:none;margin-top:0.75rem;">
+                        <div class="progress-container"><div class="progress-bar-fill" id="pullProgressBar" style="width:0%;"></div></div>
+                        <p id="pullProgressText" style="font-size:0.8rem;color:var(--text-secondary);margin:0.25rem 0 0 0;"></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Message figé — backend TensorRT-LLM -->
+            <p id="trtFrozenMsg" style="display:none;font-size:0.8rem;color:var(--text-secondary);margin-top:0.75rem;">
                 Le modèle est fixé au lancement du container TensorRT-LLM.
                 La gestion dynamique (pull / delete / activation) n'est pas disponible avec TensorRT-LLM.
                 Pour changer de modèle, relancez le container avec la nouvelle image/configuration.
@@ -3194,12 +3311,18 @@ async def config_page():
             } catch(e) {}
         }
 
-        // ========== MODÈLE LLM ACTIF (lecture seule) — TensorRT-LLM ==========
-        // La gestion dynamique Ollama (pull/activate/delete/search) a été supprimée.
-        // TensorRT-LLM ne supporte pas le changement de modèle à chaud.
+        // ========== MODÈLE LLM ACTIF + gestion dynamique (Ollama / LM Studio) ==========
+        // Le backend est détecté côté agent (LLM_URL). Si supports_hot_swap est
+        // vrai (Ollama / LM Studio), on affiche le panneau complet de gestion ;
+        // sinon (TensorRT-LLM) on montre le modèle en lecture seule + message figé.
+
+        let __supportsHotSwap = false;
 
         async function loadModels() {
             const container = document.getElementById('modelsContent');
+            const controls = document.getElementById('ollamaControls');
+            const frozenMsg = document.getElementById('trtFrozenMsg');
+            const title = document.getElementById('modelsPanelTitle');
             try {
                 const resp = await fetch('/api/llm/model');
                 const data = await resp.json();
@@ -3207,33 +3330,167 @@ async def config_page():
                     container.innerHTML = `<p style="color:var(--error);font-size:0.85rem;">⚠️ ${data.error}</p>`;
                     return;
                 }
-                const model = data.model || 'qwen3-30b-a3b-instruct';
-                const backend = data.backend || 'TensorRT-LLM 1.2 (NVFP4)';
-                const url = data.url || 'http://tensorrt-llm:8000';
-                container.innerHTML = `
-                    <table class="models-table">
-                        <thead><tr><th>Modèle</th><th>Backend</th><th>URL</th><th>Statut</th></tr></thead>
-                        <tbody><tr>
-                            <td><strong>${model}</strong> <span class="badge-active">ACTIF</span></td>
-                            <td style="font-size:0.85rem;">${backend}</td>
-                            <td style="font-size:0.8rem;color:var(--text-secondary);">${url}</td>
-                            <td style="font-size:0.8rem;color:var(--success);">Fixé au démarrage</td>
-                        </tr></tbody>
-                    </table>`;
+                __supportsHotSwap = data.supports_hot_swap === true;
+                const label = data.backend_label || data.backend || 'LLM';
+
+                if (__supportsHotSwap) {
+                    title.textContent = '🤖 Modèles LLM — ' + label;
+                    controls.style.display = 'block';
+                    frozenMsg.style.display = 'none';
+                    await loadOllamaModels();
+                } else {
+                    title.textContent = '🤖 Modèle LLM actif — ' + label;
+                    controls.style.display = 'none';
+                    frozenMsg.style.display = 'block';
+                    const model = data.model || 'qwen3-30b-a3b-instruct';
+                    const url = data.url || 'http://tensorrt-llm:8000';
+                    container.innerHTML = `
+                        <table class="models-table">
+                            <thead><tr><th>Modèle</th><th>Backend</th><th>URL</th><th>Statut</th></tr></thead>
+                            <tbody><tr>
+                                <td><strong>${model}</strong> <span class="badge-active">ACTIF</span></td>
+                                <td style="font-size:0.85rem;">${label}</td>
+                                <td style="font-size:0.8rem;color:var(--text-secondary);">${url}</td>
+                                <td style="font-size:0.8rem;color:var(--success);">Fixé au démarrage</td>
+                            </tr></tbody>
+                        </table>`;
+                }
             } catch (e) {
                 container.innerHTML = `<p style="color:var(--error);font-size:0.85rem;">⚠️ Impossible de contacter l'agent: ${e}</p>`;
             }
         }
 
-        // Fonctions supprimées (non applicables avec TensorRT-LLM) :
-        // activateModel, deleteModel, pullModel, searchModels, showTagSelector, startPull, toggleManualInput
+        async function loadOllamaModels() {
+            const container = document.getElementById('modelsContent');
+            try {
+                const resp = await fetch('/api/ollama/models');
+                const data = await resp.json();
+                if (data.error) {
+                    container.innerHTML = `<p style="color:var(--error);font-size:0.85rem;">⚠️ ${data.error}</p>`;
+                    return;
+                }
+                const models = data.models || [];
+                if (models.length === 0) {
+                    container.innerHTML = `<p style="color:var(--text-secondary);font-size:0.85rem;">Aucun modèle installé. Utilisez la recherche ci-dessous pour en télécharger un.</p>`;
+                    return;
+                }
+                container.innerHTML = `
+                    <table class="models-table">
+                        <thead><tr><th>Modèle</th><th>Taille</th><th>Params</th><th>Quant.</th><th>Statut</th><th>Actions</th></tr></thead>
+                        <tbody>${models.map(m => `
+                            <tr>
+                                <td><strong>${m.name}</strong></td>
+                                <td style="font-size:0.85rem;">${m.size_mb ? (m.size_mb/1000).toFixed(1)+' Go' : '—'}</td>
+                                <td style="font-size:0.85rem;">${m.parameter_size || '—'}</td>
+                                <td style="font-size:0.85rem;">${m.quantization || '—'}</td>
+                                <td>${m.active ? '<span class="badge-active">ACTIF</span>' : '<span style="color:var(--text-secondary);font-size:0.8rem;">installé</span>'}</td>
+                                <td>
+                                    ${m.active ? '' : `<button class="btn-sm btn-activate" onclick="activateModel('${m.name}')">Activer</button>
+                                    <button class="btn-sm" onclick="deleteModel('${m.name}')" style="color:var(--error);">Supprimer</button>`}
+                                </td>
+                            </tr>`).join('')}
+                        </tbody>
+                    </table>`;
+            } catch (e) {
+                container.innerHTML = `<p style="color:var(--error);font-size:0.85rem;">⚠️ ${e}</p>`;
+            }
+        }
 
-        // Placeholder pour les appels internes à loadModels() depuis d'autres fonctions
-        // (le rechargement de la liste reste possible car l'endpoint /api/llm/model est read-only)
+        async function activateModel(name) {
+            if (!confirm(`Activer le modèle « ${name} » ?`)) return;
+            try {
+                const resp = await fetch('/api/ollama/activate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({model: name})
+                });
+                const data = await resp.json();
+                if (!resp.ok) { alert('Erreur: ' + (data.detail || data.error || resp.status)); return; }
+                await loadOllamaModels();
+            } catch (e) { alert('Erreur: ' + e); }
+        }
 
-        // Fin du bloc modèle LLM
-        // ----- (anciens blocs pull/activate/delete supprimés) -----
-        // dummy bloc pour conserver la structure du code existant :
+        async function deleteModel(name) {
+            if (!confirm(`Supprimer définitivement « ${name} » ?`)) return;
+            try {
+                const resp = await fetch('/api/ollama/models', {
+                    method: 'DELETE',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({model: name})
+                });
+                const data = await resp.json();
+                if (!resp.ok) { alert('Erreur: ' + (data.detail || data.error || resp.status)); return; }
+                await loadOllamaModels();
+            } catch (e) { alert('Erreur: ' + e); }
+        }
+
+        function toggleManualInput() {
+            const area = document.getElementById('manualInputArea');
+            area.style.display = area.style.display === 'none' ? 'block' : 'none';
+        }
+
+        async function searchModels() {
+            const q = document.getElementById('searchModelQuery').value.trim();
+            const results = document.getElementById('searchResults');
+            if (!q) { results.innerHTML = ''; return; }
+            results.innerHTML = `<p style="font-size:0.85rem;color:var(--text-secondary);">Recherche…</p>`;
+            try {
+                const resp = await fetch('/api/ollama/search?q=' + encodeURIComponent(q));
+                const data = await resp.json();
+                if (data.error) { results.innerHTML = `<p style="color:var(--error);font-size:0.85rem;">${data.error}</p>`; return; }
+                const models = data.models || [];
+                if (models.length === 0) { results.innerHTML = `<p style="font-size:0.85rem;color:var(--text-secondary);">Aucun résultat.</p>`; return; }
+                results.innerHTML = models.map(m => `
+                    <div style="border:1px solid var(--border);border-radius:6px;padding:0.5rem;margin-bottom:0.4rem;">
+                        <strong>${m.name}</strong> <span style="font-size:0.8rem;color:var(--text-secondary);">${m.pulls ? m.pulls+' pulls' : ''}</span>
+                        <div style="font-size:0.8rem;color:var(--text-secondary);">${m.description || ''}</div>
+                        <div style="margin-top:0.35rem;">
+                            ${(m.tags && m.tags.length ? m.tags : ['latest']).map(t =>
+                                `<button class="btn-sm" onclick="pullModel('${m.name}:${t}')">${t}</button>`).join(' ')}
+                        </div>
+                    </div>`).join('');
+            } catch (e) { results.innerHTML = `<p style="color:var(--error);font-size:0.85rem;">${e}</p>`; }
+        }
+
+        async function pullModel(modelName) {
+            const name = (modelName || '').trim();
+            if (!name) { alert('Nom de modèle requis'); return; }
+            const box = document.getElementById('pullProgress');
+            const bar = document.getElementById('pullProgressBar');
+            const txt = document.getElementById('pullProgressText');
+            box.style.display = 'block'; bar.style.width = '0%'; txt.textContent = 'Démarrage…';
+            try {
+                const resp = await fetch('/api/ollama/pull', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({model: name})
+                });
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, {stream: true});
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop();
+                    for (const line of lines) {
+                        const m = line.match(/^data:\s*(.*)$/m);
+                        if (!m) continue;
+                        try {
+                            const p = JSON.parse(m[1]);
+                            if (p.error) { txt.textContent = '❌ ' + p.error; return; }
+                            bar.style.width = (p.pct || 0) + '%';
+                            txt.textContent = `${p.status || ''} ${p.pct || 0}% ` +
+                                (p.total_mb ? `(${p.completed_mb}/${p.total_mb} Mo)` : '');
+                            if (p.status === 'done') { txt.textContent = '✅ Terminé'; }
+                        } catch (e) {}
+                    }
+                }
+                await loadOllamaModels();
+            } catch (e) { txt.textContent = '❌ ' + e; }
+        }
+
         init();
         loadModels();
     </script>

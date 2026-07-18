@@ -20,6 +20,11 @@ from loguru import logger
 import yaml
 import httpx
 
+from src.generation.llm_backend import (
+    detect_llm_backend,
+    backend_supports_hot_swap,
+)
+
 # Configuration logging
 logger.add(
     "logs/agent.log",
@@ -1096,19 +1101,51 @@ async def submit_feedback(fb: FeedbackSubmit):
 
 
 # ============================================================================
-# Modèle LLM actif (lecture seule) — TensorRT-LLM
+# Modèle LLM actif + gestion dynamique (Ollama / LM Studio)
 # ============================================================================
-# TensorRT-LLM ne supporte pas le changement de modèle à chaud.
-# Le modèle est fixé au lancement du container (Qwen3-30B-A3B-Instruct NVFP4).
-# Les anciennes routes Ollama (pull/activate/delete/search) ont été supprimées.
+# Luciole Prime est bi-architecture :
+#   - x86/AMD (Ollama, LM Studio) : gestion dynamique des modèles (hot-swap).
+#   - ARM64 GX10 (TensorRT-LLM)   : modèle figé au lancement du container.
+# Le backend est déduit de LLM_URL par detect_llm_backend(). Les routes de
+# gestion Ollama ci-dessous sont exposées uniquement lorsque le backend
+# supporte le hot-swap ; sinon elles renvoient HTTP 501 Not Implemented.
+
+_HOT_SWAP_LABELS = {
+    "ollama": "Ollama",
+    "lm_studio": "LM Studio",
+    "tensorrt-llm": "TensorRT-LLM 1.2 (NVFP4)",
+}
+
+
+def _get_ollama_base_url() -> str:
+    """URL de base du backend gérable (Ollama). Priorité : LLM_URL, OLLAMA_URL, config."""
+    config = _get_config()
+    url = (
+        os.environ.get("LLM_URL")
+        or os.environ.get("OLLAMA_URL")
+        or config.get("llm", {}).get("base_url", "http://ollama:11434")
+    )
+    return url.rstrip("/")
+
+
+def _require_hot_swap() -> None:
+    """Garde : lève 501 si le backend courant ne supporte pas la gestion dynamique."""
+    backend = detect_llm_backend()
+    if not backend_supports_hot_swap(backend):
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"Gestion dynamique des modèles non supportée par le backend "
+                f"'{backend}'. Le modèle est figé au lancement du container "
+                f"TensorRT-LLM ; relancez le container pour en changer."
+            ),
+        )
+
 
 @app.get("/api/llm/model")
 async def get_active_llm_model():
     """
-    Retourne le modèle LLM actif et l'URL du backend TensorRT-LLM.
-
-    Le modèle est fixé au démarrage du container ; aucun pull/delete dynamique
-    n'est possible avec TensorRT-LLM.
+    Retourne le modèle LLM actif, le backend détecté et s'il supporte le hot-swap.
     """
     config = _get_config()
     model_name = (
@@ -1119,14 +1156,232 @@ async def get_active_llm_model():
         os.environ.get("LLM_URL")
         or config.get("llm", {}).get("base_url", "http://tensorrt-llm:8000")
     )
+    backend = detect_llm_backend(llm_url)
+    supports_hot_swap = backend_supports_hot_swap(backend)
     return {
         "model": model_name,
-        "backend": "TensorRT-LLM 1.2 (NVFP4)",
+        "backend": backend,
+        "backend_label": _HOT_SWAP_LABELS.get(backend, backend),
         "url": llm_url,
-        "dynamic_management": False,
-        "info": "Le modèle est fixé au lancement du container TensorRT-LLM. "
-                "Pour changer de modèle, relancez le container avec la nouvelle image/config.",
+        "supports_hot_swap": supports_hot_swap,
+        "dynamic_management": supports_hot_swap,
+        "info": (
+            "Gestion dynamique des modèles disponible via ce backend."
+            if supports_hot_swap
+            else "Le modèle est fixé au lancement du container TensorRT-LLM. "
+                 "Pour changer de modèle, relancez le container avec la nouvelle image/config."
+        ),
     }
+
+
+@app.get("/api/ollama/models")
+async def list_ollama_models():
+    """Liste les modèles installés (Ollama) avec leurs métadonnées."""
+    _require_hot_swap()
+    base_url = _get_ollama_base_url()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(f"{base_url}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+            config = _get_config()
+            active_model = config.get("llm", {}).get("model", "")
+            models = []
+            for m in data.get("models", []):
+                name = m.get("name", "")
+                entry = {
+                    "name": name,
+                    "size_mb": round(m.get("size", 0) / 1e6),
+                    "modified_at": m.get("modified_at", ""),
+                    "digest": m.get("digest", "")[:12],
+                    "active": name == active_model,
+                    "family": "",
+                    "parameter_size": "",
+                    "quantization": "",
+                    "context_length": 0,
+                }
+                try:
+                    show_resp = await client.post(f"{base_url}/api/show", json={"name": name})
+                    if show_resp.status_code == 200:
+                        show_data = show_resp.json()
+                        details = show_data.get("details", {})
+                        entry["family"] = details.get("family", "")
+                        entry["parameter_size"] = details.get("parameter_size", "")
+                        entry["quantization"] = details.get("quantization_level", "")
+                        for key, val in show_data.get("model_info", {}).items():
+                            if key.endswith(".context_length"):
+                                entry["context_length"] = int(val)
+                                break
+                except Exception:
+                    pass
+                models.append(entry)
+        return {"models": models, "active_model": active_model}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ollama list error: {e}")
+        raise HTTPException(status_code=502, detail=f"Erreur communication Ollama: {e}")
+
+
+@app.post("/api/ollama/pull")
+async def pull_ollama_model(request: dict):
+    """Télécharge un modèle Ollama (progression en SSE)."""
+    _require_hot_swap()
+    model_name = request.get("model", "").strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="Nom du modele requis")
+    base_url = _get_ollama_base_url()
+    logger.info(f"Pulling Ollama model: {model_name}")
+
+    async def stream_pull():
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=30, read=3600, write=30, pool=30)
+            ) as client:
+                async with client.stream(
+                    "POST", f"{base_url}/api/pull", json={"name": model_name}
+                ) as resp:
+                    if resp.status_code != 200:
+                        body = await resp.aread()
+                        yield f"data: {json.dumps({'error': body.decode()})}\n\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        if line.strip():
+                            try:
+                                progress = json.loads(line)
+                                total = progress.get("total", 0)
+                                completed = progress.get("completed", 0)
+                                status = progress.get("status", "")
+                                pct = int(completed / total * 100) if total > 0 else 0
+                                yield (
+                                    "data: "
+                                    + json.dumps({
+                                        "status": status,
+                                        "pct": pct,
+                                        "completed_mb": round(completed / 1e6),
+                                        "total_mb": round(total / 1e6),
+                                    })
+                                    + "\n\n"
+                                )
+                            except json.JSONDecodeError:
+                                pass
+            yield f"data: {json.dumps({'status': 'done', 'pct': 100})}\n\n"
+        except Exception as e:
+            logger.error(f"Ollama pull error: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(stream_pull(), media_type="text/event-stream")
+
+
+class OllamaActivateRequest(BaseModel):
+    model: str
+    num_ctx: int = 8192
+    max_tokens: int = 4096
+
+
+@app.post("/api/ollama/activate")
+async def activate_ollama_model(request: OllamaActivateRequest):
+    """Active un modèle installé (écrit dans settings.yaml + reload)."""
+    _require_hot_swap()
+    config_path = os.environ.get("CONFIG_PATH", "config/settings.yaml")
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            settings = yaml.safe_load(f.read())
+        old_model = settings.get("llm", {}).get("model", "")
+        settings["llm"]["model"] = request.model
+        settings["llm"]["num_ctx"] = request.num_ctx
+        settings["llm"]["max_tokens"] = request.max_tokens
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(settings, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        logger.info(f"LLM model changed: {old_model} -> {request.model} (num_ctx={request.num_ctx})")
+        result = await reload_config()
+        return {
+            "status": "ok",
+            "old_model": old_model,
+            "new_model": request.model,
+            "num_ctx": request.num_ctx,
+            "max_tokens": request.max_tokens,
+            "reload": result,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Activate model error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ollama/search")
+async def search_ollama_registry(q: str = ""):
+    """Recherche des modèles sur le registre public ollama.com."""
+    _require_hot_swap()
+    query = q.strip()
+    if not query:
+        return {"models": [], "error": "Parametre q requis"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://ollama.com/search?q={query}",
+                headers={"User-Agent": "Luciole/3.0"},
+            )
+            resp.raise_for_status()
+            html = resp.text
+        models = []
+        items = re.split(r'<li\s+x-test-model', html)
+        for item in items[1:]:
+            name_match = re.search(r'x-test-search-response-title[^>]*>([^<]+)<', item)
+            desc_match = re.search(r'text-neutral-800[^>]*>([^<]+)<', item)
+            sizes = re.findall(r'x-test-size[^>]*>([^<]+)<', item)
+            pulls_match = re.search(r'Pulls', item)
+            pulls = ""
+            if pulls_match:
+                before = item[:pulls_match.start()]
+                num_match = re.search(r'>\s*([\d,.]+[KMB]?)\s*$', before)
+                if num_match:
+                    pulls = num_match.group(1).strip()
+            if name_match:
+                models.append({
+                    "name": name_match.group(1).strip(),
+                    "description": desc_match.group(1).strip() if desc_match else "",
+                    "tags": [s.strip() for s in sizes],
+                    "pulls": pulls,
+                })
+        return {"models": models, "query": query}
+    except httpx.ConnectError:
+        return {"models": [], "error": "Pas de connexion internet. Utilisez la saisie manuelle."}
+    except Exception as e:
+        logger.error(f"Ollama search error: {e}")
+        return {"models": [], "error": str(e)}
+
+
+@app.delete("/api/ollama/models")
+async def delete_ollama_model(request: dict):
+    """Supprime un modèle installé (refuse le modèle actif)."""
+    _require_hot_swap()
+    model_name = request.get("model", "").strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="Nom du modele requis")
+    config = _get_config()
+    active_model = config.get("llm", {}).get("model", "")
+    if model_name == active_model:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Impossible de supprimer le modele actif ({model_name}). "
+                   f"Activez un autre modele d'abord.",
+        )
+    base_url = _get_ollama_base_url()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.request("DELETE", f"{base_url}/api/delete", json={"name": model_name})
+            if resp.status_code != 200:
+                detail = resp.text or f"Ollama a retourne {resp.status_code}"
+                raise HTTPException(status_code=resp.status_code, detail=detail)
+        logger.info(f"Ollama model deleted: {model_name}")
+        return {"status": "ok", "deleted": model_name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ollama delete error: {e}")
+        raise HTTPException(status_code=502, detail=f"Erreur communication Ollama: {e}")
 
 
 # ============================================================================
