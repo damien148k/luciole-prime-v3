@@ -40,13 +40,23 @@ class Embedder:
             model_path = cache_path / model_folder
             logger.debug(f"Recherche du modèle dans: {model_path}")
             if model_path.exists():
+                # Format standard HF : snapshots/<hash>/
                 snapshots_dir = model_path / "snapshots"
                 if snapshots_dir.exists():
                     snapshots = list(snapshots_dir.iterdir())
                     if snapshots:
                         snapshot_path = snapshots[0]
-                        logger.info(f"Modèle trouvé dans le cache local: {snapshot_path}")
+                        logger.info(f"Modèle trouvé (format snapshots): {snapshot_path}")
                         return str(snapshot_path)
+                # Format flat : fichiers directement dans models--<org>--<name>/
+                if (model_path / "config.json").exists():
+                    logger.info(f"Modèle trouvé (format flat): {model_path}")
+                    return str(model_path)
+            # Format flat sans préfixe models-- : cherche directement le dossier du modèle
+            flat_path = cache_path / model_name.split("/")[-1]
+            if flat_path.exists() and (flat_path / "config.json").exists():
+                logger.info(f"Modèle trouvé (format flat sans préfixe): {flat_path}")
+                return str(flat_path)
 
         logger.warning(f"Modèle {model_name} non trouvé dans les caches: {cache_paths}")
         return None
@@ -65,7 +75,8 @@ class Embedder:
 
         local_path = self._get_local_model_path(model_name)
 
-        model_kwargs = {"use_safetensors": True}
+        # Ne pas forcer use_safetensors : bge-m3 utilise pytorch_model.bin
+        model_kwargs = {}
 
         if local_path:
             logger.info(f"Chargement en mode offline depuis: {local_path}")

@@ -1,4 +1,4 @@
-"""Évaluation RAGAS 100% offline via Ollama local. Aucun appel externe."""
+"""Évaluation RAGAS 100% offline via TensorRT-LLM local. Aucun appel externe."""
 import os
 os.environ.setdefault("OPENAI_API_KEY", "not-needed")
 
@@ -64,23 +64,23 @@ class LucioleRAGASEvaluator:
       - context_recall (RAGAS) : le contexte couvre-t-il la bonne info ? (nécessite ground_truth)
     """
 
-    def __init__(self, llm_url: str = None, ollama_url: str = None, model: str, db_path: str = "feedbacks/ragas.db",
+    def __init__(self, model: str, llm_url: str = None, ollama_url: str = None, db_path: str = "feedbacks/ragas.db",
                  embed_model: str = "nomic-embed-text"):
         # Rétrocompatibilité : ollama_url accepté comme alias de llm_url
         if llm_url is None and ollama_url is not None:
             llm_url = ollama_url
         elif llm_url is None:
-            llm_url = "http://ollama:11434"
+            llm_url = os.environ.get("LLM_URL", "http://tensorrt-llm:8000")
         self._chat_client = ChatOpenAI(
             base_url=f"{llm_url}/v1",
-            api_key="ollama",
+            api_key="not-needed",
             model=model,
             temperature=0,
             max_retries=3,
         )
         self._embed_client = OpenAIEmbeddings(
             base_url=f"{llm_url}/v1",
-            api_key="ollama",
+            api_key="not-needed",
             model=embed_model,
             check_embedding_ctx_length=False,
         )

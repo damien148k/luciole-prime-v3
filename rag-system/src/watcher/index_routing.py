@@ -73,16 +73,17 @@ def derive_index_name(
         except (ValueError, OSError, RuntimeError):
             continue
 
+        # Si le watched_path a un index_name explicite (mode mono-instance),
+        # l'utiliser directement sans dériver depuis les sous-dossiers.
+        if wp.index_name:
+            return sanitize_index_name(wp.index_name) or default_index_name
+
         # rel.parts = (sous_dossier_projet, ..., fichier.ext)
         # On veut au moins 2 composants : <projet>/<fichier>
         if len(rel.parts) >= 2:
             sanitized = sanitize_index_name(rel.parts[0])
             if sanitized:
                 return sanitized
-
-        # Fichier à la racine du watched_path → fallback explicite si défini
-        if wp.index_name:
-            return sanitize_index_name(wp.index_name) or default_index_name
 
         # Sinon, fallback global
         return default_index_name

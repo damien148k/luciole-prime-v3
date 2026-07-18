@@ -37,13 +37,23 @@ class Reranker:
             model_path = hf_cache / model_folder
             logger.debug(f"Recherche du reranker dans: {model_path}")
             if model_path.exists():
+                # Format standard HF : snapshots/<hash>/
                 snapshots_dir = model_path / "snapshots"
                 if snapshots_dir.exists():
                     snapshots = list(snapshots_dir.iterdir())
                     if snapshots:
                         snapshot_path = snapshots[0]
-                        logger.info(f"Modèle reranker trouvé dans le cache local: {snapshot_path}")
+                        logger.info(f"Modèle reranker trouvé (format snapshots): {snapshot_path}")
                         return str(snapshot_path)
+                # Format flat : fichiers directement dans models--<org>--<name>/
+                if (model_path / "config.json").exists():
+                    logger.info(f"Modèle reranker trouvé (format flat): {model_path}")
+                    return str(model_path)
+            # Format flat sans préfixe models-- : cherche directement le dossier du modèle
+            flat_path = hf_cache / model_name.split("/")[-1]
+            if flat_path.exists() and (flat_path / "config.json").exists():
+                logger.info(f"Modèle reranker trouvé (format flat sans préfixe): {flat_path}")
+                return str(flat_path)
 
         logger.warning(f"Modèle reranker {model_name} non trouvé dans les caches: {cache_paths}")
         return None
