@@ -7,7 +7,7 @@
 **L'IA générative souveraine, installée chez vous.**
 
 > **v3** unifie deux architectures dans une seule base de code :
-> - **x86 / AMD** — mono-instance, backend LLM Ollama ou LM Studio (héritage v2)
+> - **x86 / AMD** — mono-instance, backend LLM Ollama (héritage v2)
 > - **ARM64 / NVIDIA GX10 · DGX Spark · GB10 (Blackwell sm_121)** — multi-instances métier partageant un backend **TensorRT-LLM** (Qwen3-30B-A3B-Instruct NVFP4)
 
 [![Licence: AGPL v3](https://img.shields.io/badge/Licence-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
@@ -63,8 +63,8 @@ Conçue pour les entreprises françaises et européennes qui souhaitent **garder
        │                  │                  │
 ┌──────▼──────┐    ┌──────▼──────┐    ┌──────▼──────────┐
 │   E5        │    │  OpenSearch │    │  LLM local      │
-│ Embeddings  │───▶│  Vector DB  │───▶│  (LM Studio /   │
-│ multilingue │    │  + BM25     │    │   Ollama)       │
+│ Embeddings  │───▶│  Vector DB  │───▶│   (Ollama /     │
+│ multilingue │    │  + BM25     │    │  TensorRT-LLM)  │
 └─────────────┘    └─────────────┘    └─────────────────┘
        ▲
        │
@@ -81,8 +81,9 @@ Conçue pour les entreprises françaises et européennes qui souhaitent **garder
 - **Reranking** : `BAAI/bge-reranker-v2-m3`
 - **Vector DB** : Qdrant ou OpenSearch (recherche hybride dense + BM25)
 - **LLM** : contrat unifié OpenAI-compatible via `LLM_URL`
-  - **Ollama / LM Studio** (x86/AMD) — Qwen2.5, Mistral, Llama 3, modèles fine-tunés
+  - **Ollama** (x86/AMD) — Qwen2.5, Mistral, Llama 3, modèles fine-tunés — **seul backend avec gestion dynamique des modèles depuis l'UI** (pull / activation / suppression)
   - **TensorRT-LLM** (ARM64/Blackwell) — Qwen3-30B-A3B-Instruct-2507 NVFP4
+  - > L'utilisateur peut interfacer **LM Studio** ou tout autre backend OpenAI-compatible via `LLM_URL`, mais seul Ollama bénéficie de la gestion dynamique des modèles depuis l'UI. Les autres backends peuvent servir de LLM sans management.
 - **Ingestion** : pypdf, python-docx, openpyxl, BeautifulSoup, OCR (Tesseract)
 - **Déploiement** : Docker Compose — mono-instance (`docker-compose.legacy.yml`) ou LLM partagé + N instances métier (`docker-compose.shared-llm*.yml` + `docker-compose.instance*.yml`)
 - **Frontend** : interface web légère HTML/JS (FastAPI + uvicorn)
@@ -91,7 +92,7 @@ Conçue pour les entreprises françaises et européennes qui souhaitent **garder
 
 | Cible | Compose | LLM | Instances |
 |---|---|---|---|
-| x86 / AMD (mono) | `docker-compose.legacy.yml` | Ollama / LM Studio | 1 |
+| x86 / AMD (mono) | `docker-compose.legacy.yml` | Ollama | 1 |
 | ARM64 GX10 / GB10 (partagé) | `docker-compose.shared-llm.gx10.yml` | TensorRT-LLM | N métiers |
 | ARM64 — une instance métier | `docker-compose.instance.gx10.yml` | (réseau `luciole_shared`) | 1 par métier |
 

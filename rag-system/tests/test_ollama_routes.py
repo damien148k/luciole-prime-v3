@@ -1,8 +1,8 @@
 """
-Tests — restauration de la gestion dynamique des modèles Ollama / LM Studio.
+Tests — gestion dynamique des modèles Ollama.
 
 Couvre :
-  - detect_llm_backend() pour les 3 familles d'URL (ollama / lm_studio / tensorrt-llm) ;
+  - detect_llm_backend() : ollama vs tensorrt-llm (défaut sûr pour tout le reste) ;
   - GET /api/llm/model expose `backend` + `supports_hot_swap` ;
   - les routes /api/ollama/* renvoient 501 quand le backend est TensorRT-LLM ;
   - les routes /api/ollama/* atteignent Ollama quand le backend le supporte
@@ -28,7 +28,6 @@ respx = pytest.importorskip("respx")
 
 
 OLLAMA_URL = "http://ollama:11434"
-LMSTUDIO_URL = "http://localhost:1234/v1"
 TRT_URL = "http://tensorrt-llm-shared:8000"
 
 
@@ -53,10 +52,6 @@ class TestDetectBackend:
         assert detect_llm_backend("http://ollama:11434") == "ollama"
         assert detect_llm_backend("http://localhost:11434") == "ollama"
 
-    def test_lm_studio(self):
-        assert detect_llm_backend("http://localhost:1234/v1") == "lm_studio"
-        assert detect_llm_backend("http://lmstudio:1234") == "lm_studio"
-
     def test_tensorrt(self):
         assert detect_llm_backend("http://tensorrt-llm-shared:8000") == "tensorrt-llm"
         assert detect_llm_backend("http://trt:8000/v1") == "tensorrt-llm"
@@ -64,7 +59,12 @@ class TestDetectBackend:
     def test_default_is_safe(self):
         # URL vide/inconnue → tensorrt-llm (pas de hot-swap exposé par erreur)
         assert detect_llm_backend("") == "tensorrt-llm"
-        assert detect_llm_backend("http://unknown-host:9999") == "tensorrt-llm"
+        assert detect_llm_backend("http://weird-service:9999") == "tensorrt-llm"
+
+    def test_non_ollama_openai_backend_defaults_to_trt(self):
+        # LM Studio / vLLM ou tout backend OpenAI-compatible non-Ollama :
+        # utilisable comme moteur d'inférence mais pas de gestion dynamique UI.
+        assert detect_llm_backend("http://localhost:1234/v1") == "tensorrt-llm"
 
     def test_env_fallback(self, monkeypatch):
         monkeypatch.setenv("LLM_URL", "http://ollama:11434")
@@ -72,7 +72,6 @@ class TestDetectBackend:
 
     def test_supports_hot_swap(self):
         assert backend_supports_hot_swap("ollama") is True
-        assert backend_supports_hot_swap("lm_studio") is True
         assert backend_supports_hot_swap("tensorrt-llm") is False
 
 

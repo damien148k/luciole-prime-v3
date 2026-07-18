@@ -34,9 +34,11 @@ de code unifiée.
   positionnement multi-métier. Les 15 règles éolien / ICPE historiques sont
   archivées dans `config/profiles/query_rewriter.eolien.py`.
 - Contrat LLM unifié (`agent/api.py`, `generation/llm.py`, `mail/*`,
-  `watcher/config.py`) : Ollama, LM Studio et TensorRT-LLM interchangeables.
+  `watcher/config.py`) : Ollama et TensorRT-LLM interchangeables via `LLM_URL`
+  (OpenAI-compatible). Tout autre backend OpenAI-compatible (LM Studio, vLLM…)
+  reste utilisable comme moteur d'inférence, sans gestion dynamique depuis l'UI.
 - `config/settings.yaml.example` : base multi (TensorRT-LLM) + commentaires pour
-  bascule Ollama / LM Studio.
+  bascule Ollama.
 - `docker-compose.yml` v2 renommé en `docker-compose.legacy.yml` (déploiement
   mono-instance x86/AMD).
 - `chat_ui` lancé via `uvicorn src.api.chat_ui:app` partout (c'est une app

@@ -495,11 +495,11 @@ async def export_feedbacks_csv():
 
 
 # ============================================================================
-# MODÈLE LLM ACTIF + gestion dynamique (Ollama / LM Studio)
+# MODÈLE LLM ACTIF + gestion dynamique (Ollama)
 # ============================================================================
 # Ces proxies transfèrent vers l'Agent API. La gestion dynamique n'est active
-# que si le backend le supporte (Ollama/LM Studio) ; sur TensorRT-LLM l'agent
-# renvoie HTTP 501, transféré tel quel à l'UI.
+# que si le backend le supporte (Ollama) ; sur TensorRT-LLM (ou tout autre
+# backend non-Ollama) l'agent renvoie HTTP 501, transféré tel quel à l'UI.
 
 @app.get("/api/llm/model")
 async def proxy_llm_model():
@@ -2555,7 +2555,7 @@ async def config_page():
                 <p style="color:var(--text-secondary);font-size:0.85rem;">Chargement...</p>
             </div>
 
-            <!-- Gestion dynamique (Ollama / LM Studio) — affichée seulement si hot-swap -->
+            <!-- Gestion dynamique (Ollama) — affichée seulement si hot-swap -->
             <div id="ollamaControls" style="display:none;margin-top:1rem;">
                 <div class="pull-form">
                     <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem;">➕ Installer un modèle</h4>
@@ -3311,10 +3311,11 @@ async def config_page():
             } catch(e) {}
         }
 
-        // ========== MODÈLE LLM ACTIF + gestion dynamique (Ollama / LM Studio) ==========
+        // ========== MODÈLE LLM ACTIF + gestion dynamique (Ollama) ==========
         // Le backend est détecté côté agent (LLM_URL). Si supports_hot_swap est
-        // vrai (Ollama / LM Studio), on affiche le panneau complet de gestion ;
-        // sinon (TensorRT-LLM) on montre le modèle en lecture seule + message figé.
+        // vrai (Ollama), on affiche le panneau complet de gestion ; sinon
+        // (TensorRT-LLM ou autre backend non-Ollama) on montre le modèle en
+        // lecture seule + message figé.
 
         let __supportsHotSwap = false;
 

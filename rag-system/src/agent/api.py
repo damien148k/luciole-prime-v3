@@ -1101,18 +1101,17 @@ async def submit_feedback(fb: FeedbackSubmit):
 
 
 # ============================================================================
-# Modèle LLM actif + gestion dynamique (Ollama / LM Studio)
+# Modèle LLM actif + gestion dynamique (Ollama)
 # ============================================================================
 # Luciole Prime est bi-architecture :
-#   - x86/AMD (Ollama, LM Studio) : gestion dynamique des modèles (hot-swap).
-#   - ARM64 GX10 (TensorRT-LLM)   : modèle figé au lancement du container.
+#   - x86/AMD (Ollama)         : gestion dynamique des modèles (hot-swap).
+#   - ARM64 GX10 (TensorRT-LLM): modèle figé au lancement du container.
 # Le backend est déduit de LLM_URL par detect_llm_backend(). Les routes de
 # gestion Ollama ci-dessous sont exposées uniquement lorsque le backend
 # supporte le hot-swap ; sinon elles renvoient HTTP 501 Not Implemented.
 
 _HOT_SWAP_LABELS = {
     "ollama": "Ollama",
-    "lm_studio": "LM Studio",
     "tensorrt-llm": "TensorRT-LLM 1.2 (NVFP4)",
 }
 

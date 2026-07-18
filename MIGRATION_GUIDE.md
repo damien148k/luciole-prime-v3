@@ -24,7 +24,7 @@ ne voulez rien changer, utilisez `docker-compose.legacy.yml`.
 | Sujet | v2 | v3 |
 |---|---|---|
 | Fichier compose mono-instance | `docker-compose.yml` | `docker-compose.legacy.yml` |
-| Backend LLM | Ollama uniquement | Ollama / LM Studio / TensorRT-LLM (contrat `LLM_URL`) |
+| Backend LLM | Ollama uniquement | Ollama / TensorRT-LLM (contrat `LLM_URL` OpenAI-compatible ; autres backends OpenAI-compatibles utilisables sans gestion dynamique UI) |
 | Architecture ARM64 | ✗ | GX10 / GB10 (Blackwell sm_121) |
 | Multi-instances métier | ✗ | LLM partagé + N instances (réseau `luciole_shared`) |
 | Règles de query rewriting | 15 règles éolien codées en dur | `BUSINESS_RULES = []` par défaut + profils `config/profiles/` |
