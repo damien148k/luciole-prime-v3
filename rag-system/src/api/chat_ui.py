@@ -54,7 +54,7 @@ async def get_logo():
     if LOGO_PATH.exists():
         return FileResponse(LOGO_PATH, media_type="image/png")
     # Fallback: chercher dans pics/
-    alt_path = Path(__file__).parent.parent.parent / "pics" / "luciole.png"
+    alt_path = Path(__file__).parent.parent.parent / "pics" / "luciole-logo.png"
     if alt_path.exists():
         return FileResponse(alt_path, media_type="image/png")
     return HTMLResponse("Logo not found", status_code=404)
@@ -66,7 +66,7 @@ async def get_favicon():
     """Servir le favicon (même image que le logo)"""
     if LOGO_PATH.exists():
         return FileResponse(LOGO_PATH, media_type="image/png")
-    alt_path = Path(__file__).parent.parent.parent / "pics" / "luciole.png"
+    alt_path = Path(__file__).parent.parent.parent / "pics" / "luciole-logo.png"
     if alt_path.exists():
         return FileResponse(alt_path, media_type="image/png")
     return HTMLResponse("Favicon not found", status_code=404)
