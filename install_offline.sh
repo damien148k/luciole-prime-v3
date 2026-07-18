@@ -190,10 +190,38 @@ elif [ -d "$PACKAGE_PATH/config" ]; then
     cp -r "$PACKAGE_PATH/config/"* "$INSTANCE_PATH/config/"
 fi
 
-# Generer settings.yaml depuis l'example si absent (config par instance, non versionnee)
+# Generer settings.yaml (Ollama x86) depuis settings.yaml.example si absent
+# (config par instance, non versionnee). L'.example cible TensorRT-LLM
+# (profil GX10/ARM64) par defaut. install_offline.sh ne gere que le profil
+# x86/AMD (Ollama), donc on remplace le bloc "llm:" par un bloc Ollama au lieu
+# de copier tel quel le bloc TensorRT-LLM (qui ferait planter l'agent au demarrage).
 if [ ! -f "$INSTANCE_PATH/config/settings.yaml" ] && [ -f "$INSTANCE_PATH/config/settings.yaml.example" ]; then
-    cp "$INSTANCE_PATH/config/settings.yaml.example" "$INSTANCE_PATH/config/settings.yaml"
-    ok "settings.yaml genere depuis settings.yaml.example"
+    OLLAMA_LLM_BLOCK=$(mktemp)
+    cat > "$OLLAMA_LLM_BLOCK" << 'LLMEOF'
+llm:
+  provider: ollama
+  model: qwen2.5:14b-instruct-q4_K_M
+  base_url: http://ollama:11434
+  api_format: openai
+  temperature: 0.1
+  max_tokens: 4096
+  num_ctx: 16384
+  timeout: 1800
+
+LLMEOF
+    awk -v block_file="$OLLAMA_LLM_BLOCK" '
+        /^llm:/ && !inserted {
+            while ((getline line < block_file) > 0) print line
+            inserted=1
+            in_llm=1
+            next
+        }
+        /^llm:/ { in_llm=1; next }
+        /^agent:/ { in_llm=0 }
+        !in_llm { print }
+    ' "$INSTANCE_PATH/config/settings.yaml.example" > "$INSTANCE_PATH/config/settings.yaml"
+    rm -f "$OLLAMA_LLM_BLOCK"
+    ok "settings.yaml genere depuis settings.yaml.example (llm.provider=ollama)"
 fi
 ok "Configuration copiee"
 

@@ -258,6 +258,38 @@ Write-Host "  Copie de la configuration..."
 Copy-Item -Path "$PackageDir\config\*" -Destination "$InstancePath\config" -Recurse -Force
 Write-OK "Configuration copiee"
 
+# Generer settings.yaml (Ollama x86) depuis settings.yaml.example
+# L'.example cible TensorRT-LLM (profil GX10/ARM64) par defaut. INSTALL.ps1 ne
+# gere que Windows/x86, ou le seul backend LLM disponible est Ollama : on
+# remplace donc le bloc "llm:" de l'.example par un bloc Ollama, au lieu de
+# copier tel quel le bloc TensorRT-LLM (qui ferait planter l'agent au demarrage).
+Write-Host "  Generation de settings.yaml (profil Ollama x86)..."
+$exampleContent = Get-Content -Path "$PackageDir\config\settings.yaml.example" -Raw -Encoding UTF8
+
+$ollamaLlmBlock = @"
+llm:
+  provider: ollama
+  model: qwen2.5:14b-instruct-q4_K_M
+  base_url: http://ollama:11434
+  api_format: openai
+  temperature: 0.1
+  max_tokens: 4096
+  num_ctx: 16384
+  timeout: 1800
+
+"@
+
+# Le bloc "llm:" original s'etend de la ligne "llm:" jusqu'a la ligne
+# qui commence la section suivante ("agent:"). On le remplace en bloc.
+$llmBlockPattern = '(?ms)^llm:.*?(?=^agent:)'
+if ($exampleContent -notmatch $llmBlockPattern) {
+    throw "Impossible de localiser le bloc 'llm:' dans settings.yaml.example -- verifier le format du fichier"
+}
+$settingsContent = [regex]::Replace($exampleContent, $llmBlockPattern, $ollamaLlmBlock)
+
+Set-Content -Path "$InstancePath\config\settings.yaml" -Value $settingsContent -Encoding UTF8
+Write-OK "settings.yaml genere (llm.provider=ollama)"
+
 # Copier les modeles si disponibles
 if (Test-Path "$PackageDir\models\huggingface") {
     $hfContent = Get-ChildItem -Path "$PackageDir\models\huggingface" -ErrorAction SilentlyContinue

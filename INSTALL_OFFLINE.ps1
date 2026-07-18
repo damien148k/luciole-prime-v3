@@ -337,11 +337,36 @@ if (Test-Path "$PackagePath\config\settings.yaml") {
     throw "Configuration introuvable: ni config\settings.yaml(.example) ni config\config\settings.yaml(.example) dans le package."
 }
 
-# Generer settings.yaml depuis l'example si absent (config par instance, non versionnee)
-# Parite avec install_offline.sh (Linux) qui fait deja cette generation.
+# Generer settings.yaml (Ollama x86) depuis settings.yaml.example si absent
+# (config par instance, non versionnee). Parite avec install_offline.sh (Linux).
+# L'.example cible TensorRT-LLM (profil GX10/ARM64) par defaut. INSTALL_OFFLINE.ps1
+# ne gere que le profil x86/AMD (Ollama), donc on remplace le bloc "llm:" par un
+# bloc Ollama au lieu de copier tel quel le bloc TensorRT-LLM (qui ferait planter
+# l'agent au demarrage).
 if (-not (Test-Path "$InstancePath\config\settings.yaml") -and (Test-Path "$InstancePath\config\settings.yaml.example")) {
-    Copy-Item -Path "$InstancePath\config\settings.yaml.example" -Destination "$InstancePath\config\settings.yaml" -Force
-    Write-OK "settings.yaml genere depuis settings.yaml.example"
+    $exampleContent = Get-Content -Path "$InstancePath\config\settings.yaml.example" -Raw -Encoding UTF8
+
+    $ollamaLlmBlock = @"
+llm:
+  provider: ollama
+  model: qwen2.5:14b-instruct-q4_K_M
+  base_url: http://ollama:11434
+  api_format: openai
+  temperature: 0.1
+  max_tokens: 4096
+  num_ctx: 16384
+  timeout: 1800
+
+"@
+
+    $llmBlockPattern = '(?ms)^llm:.*?(?=^agent:)'
+    if ($exampleContent -notmatch $llmBlockPattern) {
+        throw "Impossible de localiser le bloc 'llm:' dans settings.yaml.example -- verifier le format du fichier"
+    }
+    $settingsContent = [regex]::Replace($exampleContent, $llmBlockPattern, $ollamaLlmBlock)
+
+    Set-Content -Path "$InstancePath\config\settings.yaml" -Value $settingsContent -Encoding UTF8
+    Write-OK "settings.yaml genere depuis settings.yaml.example (llm.provider=ollama)"
 }
 
 # Copier docker-compose (le mono-instance x86/AMD = docker-compose.legacy.yml)
