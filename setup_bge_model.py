@@ -72,7 +72,44 @@ print("\n[3/4] Conversion pytorch_model.bin → model.safetensors...")
 import torch
 from safetensors.torch import save_file
 
-state_dict = torch.load(bin_path, map_location="cpu", weights_only=False)
+
+def _detect_bin_format(path):
+    """Détecte le format d'un fichier .bin PyTorch à partir de ses premiers octets.
+
+    Retourne un tuple (format, header) où format vaut "zip", "pickle" ou None.
+
+    - b'\\x80'   : pickle legacy (torch.save « classique », PyTorch < 2.x)
+    - b'PK\\x03\\x04' (alias b'PK') : conteneur ZIP (torch.save format PyTorch 2.x,
+      utilisé par défaut par HuggingFace depuis 2024 pour BAAI/bge-m3)
+    """
+    with open(path, "rb") as fh:
+        header = fh.read(4)
+    if header[:2] == b"PK":
+        return "zip", header
+    if header[:1] == b"\x80":
+        return "pickle", header
+    return None, header
+
+
+_fmt, _header = _detect_bin_format(bin_path)
+
+if _fmt == "zip":
+    # PyTorch 2.x sauvegarde ses .bin en conteneur ZIP. BAAI/bge-m3 est un modèle
+    # officiel avec des wrappers SentenceTransformer : on ne peut pas restreindre
+    # à weights_only=True (les classes SentenceTransformer ne sont pas whitelistées
+    # par le unpickler restreint), donc weights_only=False est nécessaire et sûr ici.
+    print("  Format détecté : ZIP (PyTorch 2.x)")
+    state_dict = torch.load(bin_path, map_location="cpu", weights_only=False)
+elif _fmt == "pickle":
+    # Ancien format pickle legacy (torch.save avant PyTorch 2.x). Même remarque :
+    # weights_only=True casserait le chargement des wrappers SentenceTransformer.
+    print("  Format détecté : pickle legacy")
+    state_dict = torch.load(bin_path, map_location="cpu", weights_only=False)
+else:
+    raise RuntimeError(
+        f"Format inconnu du fichier {bin_path} — premiers bytes: {_header!r}"
+    )
+
 if "state_dict" in state_dict:
     state_dict = state_dict["state_dict"]
 
@@ -94,10 +131,12 @@ if bin_in_snap.exists() or bin_in_snap.is_symlink():
     print(f"  Supprimé : {bin_in_snap}")
 
 # Supprimer aussi le blob .bin s'il est présent en dur
+# (on reconnaît un blob .bin PyTorch qu'il soit au format pickle legacy
+#  ou au format ZIP PyTorch 2.x — cf. _detect_bin_format ci-dessus)
 for b in (cache / "blobs").iterdir():
     with open(b, "rb") as f:
-        header = f.read(1)
-    if header == b'\x80':  # signature pickle
+        header = f.read(4)
+    if header[:1] == b'\x80' or header[:2] == b'PK':
         b.unlink()
         print(f"  Blob .bin supprimé : {b.name[:20]}...")
 
