@@ -1,3 +1,11 @@
+# YAML anchor pour l'image applicative Luciole (5 services partagent la même image)
+# Le build utilise le contexte rag-system/ car c'est là que se trouvent src/, setup/, pics/
+x-luciole-image: &luciole-image
+  image: luciole-gpu:latest
+  build:
+    context: ./rag-system
+    dockerfile: ../Dockerfile.gpu
+
 services:
   ollama:
     image: ollama/ollama:latest
@@ -69,7 +77,7 @@ services:
         max-file: '3'
     restart: unless-stopped
   agent:
-    image: luciole-gpu:latest
+    <<: *luciole-image
     container_name: luciole-agent-${INSTANCE_NAME}
     profiles:
     - gpu
@@ -125,7 +133,7 @@ services:
             capabilities:
             - gpu
   admin-ui:
-    image: luciole-gpu:latest
+    <<: *luciole-image
     container_name: luciole-admin-${INSTANCE_NAME}
     profiles:
     - gpu
@@ -179,7 +187,7 @@ services:
             capabilities:
             - gpu
   chat:
-    image: luciole-gpu:latest
+    <<: *luciole-image
     container_name: luciole-chat-${INSTANCE_NAME}
     profiles:
     - gpu
@@ -211,7 +219,7 @@ services:
         max-file: '3'
     restart: unless-stopped
   feedback:
-    image: luciole-gpu:latest
+    <<: *luciole-image
     container_name: luciole-feedback-${INSTANCE_NAME}
     profiles:
     - gpu
@@ -250,7 +258,7 @@ services:
         max-file: '3'
     restart: unless-stopped
   watcher:
-    image: luciole-gpu:latest
+    <<: *luciole-image
     container_name: luciole-watcher-${INSTANCE_NAME}
     profiles:
     - gpu
