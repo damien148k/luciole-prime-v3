@@ -1,7 +1,9 @@
 # YAML anchor pour l'image applicative Luciole (5 services partagent la même image)
 # Le build utilise le contexte rag-system/ car c'est là que se trouvent src/, setup/, pics/
 x-luciole-image: &luciole-image
-  image: luciole-gpu:latest
+  # LUCIOLE_IMAGE=luciole-gpu:latest en profil gpu, luciole-cpu:latest en profil cpu
+  # Fallback vers luciole-gpu:latest si la variable est absente (retrocompatibilite).
+  image: ${LUCIOLE_IMAGE:-luciole-gpu:latest}
   build:
     context: ./rag-system
     dockerfile: ../Dockerfile.gpu

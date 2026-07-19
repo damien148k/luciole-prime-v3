@@ -234,6 +234,14 @@ ok "Configuration copiee"
 cp "$SCRIPT_DIR/docker-compose.legacy.yml" "$INSTANCE_PATH/docker-compose.yml"
 ok "docker-compose.yml copie"
 
+# En profil CPU, activer l'override qui neutralise les reservations GPU
+# des services applicatifs (agent, admin-ui, watcher). Le fichier
+# docker-compose.override.yml est lu automatiquement par docker compose.
+if [ "$PROFILE" = "cpu" ] && [ -f "$SCRIPT_DIR/docker-compose.cpu.override.yml" ]; then
+    cp "$SCRIPT_DIR/docker-compose.cpu.override.yml" "$INSTANCE_PATH/docker-compose.override.yml"
+    ok "docker-compose.override.yml copie (profil cpu, neutralisation deploy nvidia)"
+fi
+
 # Copier manage.sh
 [ -f "$SCRIPT_DIR/manage.sh" ] && cp "$SCRIPT_DIR/manage.sh" "$INSTANCE_PATH/manage.sh" && chmod +x "$INSTANCE_PATH/manage.sh"
 
@@ -283,6 +291,7 @@ cat > "$INSTANCE_PATH/.env" << ENVEOF
 
 INSTANCE_NAME=$INSTANCE_NAME
 COMPOSE_PROFILES=$PROFILE
+LUCIOLE_IMAGE=$LUCIOLE_IMAGE
 
 # Ports reseau
 API_PORT=${PORTS[API]}

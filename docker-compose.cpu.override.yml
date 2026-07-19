@@ -1,0 +1,32 @@
+# Docker Compose override pour le profil CPU
+#
+# Ce fichier neutralise les reservations GPU (nvidia) des services applicatifs
+# lorsqu'on execute Luciole sans GPU. install.sh l'active automatiquement
+# quand PROFILE=cpu.
+#
+# Utilisation manuelle :
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.override.yml \
+#     --profile cpu up -d
+#
+# Note: sans ce fichier, en profil cpu, Docker refuserait de creer les
+# containers agent/admin-ui/watcher car ils reservent un device nvidia
+# qui n'est pas disponible sur la machine hote.
+
+services:
+  agent:
+    deploy:
+      resources:
+        reservations:
+          devices: []
+
+  admin-ui:
+    deploy:
+      resources:
+        reservations:
+          devices: []
+
+  watcher:
+    deploy:
+      resources:
+        reservations:
+          devices: []
