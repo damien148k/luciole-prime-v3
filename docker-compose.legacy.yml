@@ -114,9 +114,10 @@ services:
     profiles:
     - gpu
     - cpu
+    # Note: pas de depends_on sur ollama pour rester compatible avec les 2
+    # profils (ollama et ollama-cpu sont mutuellement exclusifs). L'agent
+    # attend Ollama via retry HTTP sur LLM_URL au demarrage.
     depends_on:
-      ollama:
-        condition: service_healthy
       qdrant:
         condition: service_started
       opensearch:
