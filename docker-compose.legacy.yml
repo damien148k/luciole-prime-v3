@@ -47,11 +47,15 @@ services:
       retries: 5
   ollama-cpu:
     image: ollama/ollama:latest
-    container_name: luciole-ollama-${INSTANCE_NAME}
+    container_name: luciole-ollama-cpu-${INSTANCE_NAME}
     ports:
     - 127.0.0.1:${OLLAMA_PORT:-11434}:11434
     volumes:
     - ./models/ollama:/root/.ollama
+    networks:
+      default:
+        aliases:
+        - ollama
     environment:
     - TZ=${TZ:-Europe/Paris}
     - OLLAMA_NUM_PARALLEL=1
@@ -109,6 +113,7 @@ services:
     container_name: luciole-agent-${INSTANCE_NAME}
     profiles:
     - gpu
+    - cpu
     depends_on:
       ollama:
         condition: service_healthy
@@ -165,6 +170,7 @@ services:
     container_name: luciole-admin-${INSTANCE_NAME}
     profiles:
     - gpu
+    - cpu
     depends_on:
       qdrant:
         condition: service_started
@@ -219,6 +225,7 @@ services:
     container_name: luciole-chat-${INSTANCE_NAME}
     profiles:
     - gpu
+    - cpu
     depends_on:
     - agent
     environment:
@@ -251,6 +258,7 @@ services:
     container_name: luciole-feedback-${INSTANCE_NAME}
     profiles:
     - gpu
+    - cpu
     depends_on:
     - agent
     environment:
@@ -290,6 +298,7 @@ services:
     container_name: luciole-watcher-${INSTANCE_NAME}
     profiles:
     - gpu
+    - cpu
     depends_on:
       qdrant:
         condition: service_started
