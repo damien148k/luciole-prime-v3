@@ -384,8 +384,11 @@ step "7/8" "Demarrage des services..."
 cd "$INSTANCE_PATH"
 
 OLLAMA_SVC="ollama"
-[ "$PROFILE" = "cpu" ] && OLLAMA_SVC="ollama-cpu"
 OLLAMA_CONTAINER="luciole-ollama-$INSTANCE_NAME"
+if [ "$PROFILE" = "cpu" ]; then
+    OLLAMA_SVC="ollama-cpu"
+    OLLAMA_CONTAINER="luciole-ollama-cpu-$INSTANCE_NAME"
+fi
 
 echo "  Demarrage Ollama + Qdrant + OpenSearch..."
 docker compose --profile "$PROFILE" up -d "$OLLAMA_SVC" qdrant opensearch
