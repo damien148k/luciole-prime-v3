@@ -201,11 +201,15 @@ cp -r "$SCRIPT_DIR/config/"* "$INSTANCE_PATH/config/"
 # (Ollama), donc on remplace le bloc "llm:" par un bloc Ollama au lieu de
 # copier tel quel le bloc TensorRT-LLM (qui ferait planter l'agent au demarrage).
 if [ ! -f "$INSTANCE_PATH/config/settings.yaml" ] && [ -f "$INSTANCE_PATH/config/settings.yaml.example" ]; then
+    # Choix du modele aligne sur le profil (identique au pull ligne 425)
+    OLLAMA_MODEL_YAML="qwen2.5:14b-instruct-q4_K_M"
+    [ "$PROFILE" = "cpu" ] && OLLAMA_MODEL_YAML="qwen2.5:7b-instruct-q4_K_M"
+
     OLLAMA_LLM_BLOCK=$(mktemp)
-    cat > "$OLLAMA_LLM_BLOCK" << 'LLMEOF'
+    cat > "$OLLAMA_LLM_BLOCK" << LLMEOF
 llm:
   provider: ollama
-  model: qwen2.5:14b-instruct-q4_K_M
+  model: $OLLAMA_MODEL_YAML
   base_url: http://ollama:11434
   api_format: openai
   temperature: 0.1
