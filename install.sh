@@ -234,12 +234,29 @@ ok "Configuration copiee"
 cp "$SCRIPT_DIR/docker-compose.legacy.yml" "$INSTANCE_PATH/docker-compose.yml"
 ok "docker-compose.yml copie"
 
-# En profil CPU, activer l'override qui neutralise les reservations GPU
-# des services applicatifs (agent, admin-ui, watcher). Le fichier
-# docker-compose.override.yml est lu automatiquement par docker compose.
-if [ "$PROFILE" = "cpu" ] && [ -f "$SCRIPT_DIR/docker-compose.cpu.override.yml" ]; then
-    cp "$SCRIPT_DIR/docker-compose.cpu.override.yml" "$INSTANCE_PATH/docker-compose.override.yml"
-    ok "docker-compose.override.yml copie (profil cpu, neutralisation deploy nvidia)"
+# En profil CPU, supprimer les blocs 'deploy: resources: reservations:
+# devices: - driver: nvidia' des services applicatifs (agent, admin-ui,
+# watcher). Un override compose ne fonctionne pas car la sematique de
+# fusion sur devices concatene au lieu de remplacer.
+# On utilise sed en place sur le compose de l'instance (safe : le repo
+# n'est pas modifie, uniquement la copie dans /opt/rag/luciole-*/).
+if [ "$PROFILE" = "cpu" ]; then
+    # Utiliser un container Python (deja garanti dispo via l'image Luciole)
+    # pour reparser le YAML et retirer les blocs deploy des services
+    # applicatifs (pas ollama qui est en profil gpu, donc ignore en cpu).
+    docker run --rm -v "$INSTANCE_PATH:/work" "$LUCIOLE_IMAGE" python3 -c "
+import yaml
+with open('/work/docker-compose.yml') as f:
+    d = yaml.safe_load(f)
+for name in ['agent', 'admin-ui', 'watcher']:
+    svc = d['services'].get(name, {})
+    if 'deploy' in svc:
+        del svc['deploy']
+with open('/work/docker-compose.yml', 'w') as f:
+    yaml.safe_dump(d, f, default_flow_style=False, sort_keys=False)
+print('OK: blocs deploy nvidia retires de agent, admin-ui, watcher')
+" && ok "docker-compose.yml patche (profil cpu, deploy nvidia retire)" \
+       || warn "Patch compose cpu echoue -- l'agent risque de refuser de demarrer"
 fi
 
 # Copier manage.sh
