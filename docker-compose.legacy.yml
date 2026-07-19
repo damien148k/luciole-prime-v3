@@ -45,6 +45,34 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+  ollama-cpu:
+    image: ollama/ollama:latest
+    container_name: luciole-ollama-${INSTANCE_NAME}
+    ports:
+    - 127.0.0.1:${OLLAMA_PORT:-11434}:11434
+    volumes:
+    - ./models/ollama:/root/.ollama
+    environment:
+    - TZ=${TZ:-Europe/Paris}
+    - OLLAMA_NUM_PARALLEL=1
+    - OLLAMA_MAX_LOADED_MODELS=1
+    - OLLAMA_KEEP_ALIVE=60m
+    profiles:
+    - cpu
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    restart: unless-stopped
+    healthcheck:
+      test:
+      - CMD
+      - ollama
+      - list
+      interval: 30s
+      timeout: 10s
+      retries: 5
   qdrant:
     image: qdrant/qdrant:v1.7.4
     container_name: luciole-qdrant-${INSTANCE_NAME}
