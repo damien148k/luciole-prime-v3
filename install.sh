@@ -9,8 +9,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BASE_INSTALL_PATH="/opt/rag"
-INSTANCE_NAME="${1:-}"
-PROFILE="${2:-gpu}"
+# Le nom de l'instance est TOUJOURS saisi de maniere interactive dans l'etape 1/8
+# (pas d'argument positionnel accepte, pour eviter les instances creees par
+# erreur avec un nom automatique comme 'test01').
+PROFILE="${1:-gpu}"
 
 # Ports par defaut
 declare -A DEFAULT_PORTS=(
@@ -78,22 +80,21 @@ fi
 docker ps &>/dev/null || { echo "  [ERREUR] Docker n'est pas demarre." >&2; exit 1; }
 ok "Docker detecte: $(docker --version)"
 
-# Nom de l'instance
+# Nom de l'instance -- saisi interactivement, pas d'argument positionnel
 step "1/8" "Configuration du projet..."
 
-if [ -z "$INSTANCE_NAME" ]; then
-    while true; do
-        echo ""
-        read -rp "  Nom du projet/metier (ex: chavenay, juridique, rh) : " INSTANCE_NAME
-        INSTANCE_NAME=$(echo "$INSTANCE_NAME" | tr '[:upper:]' '[:lower:]' | xargs)
-        if validate_name "$INSTANCE_NAME"; then
-            break
-        fi
-        warn "Nom invalide. Utilisez: lettres minuscules, chiffres, tirets"
-        echo "  Exemples: chavenay, juridique, rh, finance-2024"
-        INSTANCE_NAME=""
-    done
-fi
+INSTANCE_NAME=""
+while true; do
+    echo ""
+    read -rp "  Pour quel metier / client ? (ex: chavenay, juridique, rh) : " INSTANCE_NAME
+    INSTANCE_NAME=$(echo "$INSTANCE_NAME" | tr '[:upper:]' '[:lower:]' | xargs)
+    if validate_name "$INSTANCE_NAME"; then
+        break
+    fi
+    warn "Nom invalide. Utilisez: lettres minuscules, chiffres, tirets"
+    echo "  Exemples: chavenay, juridique, rh, finance-2024"
+    INSTANCE_NAME=""
+done
 
 INSTANCE_PATH="$BASE_INSTALL_PATH/luciole-$INSTANCE_NAME"
 

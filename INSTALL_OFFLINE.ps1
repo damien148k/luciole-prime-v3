@@ -6,8 +6,10 @@
 # Ce script demande le nom du projet, cree C:\RAG\luciole-{nom}\ et installe.
 # ============================================================================
 
+# Le nom d'instance est TOUJOURS saisi de maniere interactive dans l'etape 1/8
+# (pas de parametre accepte, pour eviter les instances creees par erreur avec
+# un nom automatique comme 'test01').
 param(
-    [string]$InstanceName = "",
     [ValidateSet("gpu", "cpu")]
     [string]$Profile = "gpu",
     [string]$PackagePath = "",
@@ -167,18 +169,17 @@ try {
 
 Write-Step "1/8" "Configuration du projet..."
 
-if ([string]::IsNullOrWhiteSpace($InstanceName)) {
-    do {
-        Write-Host ""
-        $InstanceName = Read-Host "  Nom du projet/metier (ex: chavenay, juridique, rh)"
-        $InstanceName = $InstanceName.ToLower().Trim()
-        if (-not (Test-InstanceName $InstanceName)) {
-            Write-Warn "Nom invalide. Utilisez: lettres minuscules, chiffres, tirets"
-            Write-Host "  Exemples: chavenay, juridique, rh, finance-2024" -ForegroundColor Gray
-            $InstanceName = ""
-        }
-    } while ([string]::IsNullOrWhiteSpace($InstanceName))
-}
+$InstanceName = ""
+do {
+    Write-Host ""
+    $InstanceName = Read-Host "  Pour quel metier / client ? (ex: chavenay, juridique, rh)"
+    $InstanceName = $InstanceName.ToLower().Trim()
+    if (-not (Test-InstanceName $InstanceName)) {
+        Write-Warn "Nom invalide. Utilisez: lettres minuscules, chiffres, tirets"
+        Write-Host "  Exemples: chavenay, juridique, rh, finance-2024" -ForegroundColor Gray
+        $InstanceName = ""
+    }
+} while ([string]::IsNullOrWhiteSpace($InstanceName))
 
 $InstancePath = "$BaseInstallPath\luciole-$InstanceName"
 

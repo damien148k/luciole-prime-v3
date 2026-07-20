@@ -115,7 +115,7 @@ Le déploiement multi-instances repose sur un réseau Docker externe `luciole_sh
 ```powershell
 git clone https://github.com/damien148k/luciole-prime.git
 cd luciole-prime
-.\INSTALL.ps1 -InstanceName mon-projet
+.\INSTALL.ps1
 ```
 
 **Linux / macOS :**
@@ -123,8 +123,12 @@ cd luciole-prime
 git clone https://github.com/damien148k/luciole-prime.git
 cd luciole-prime
 chmod +x install.sh
-./install.sh mon-projet
+./install.sh
 ```
+
+Le script demandera de maniere interactive le nom du metier / client
+(ex: chavenay, juridique, rh) a l'etape 1/8. Ajouter `cpu` en argument
+pour un deploiement sans GPU : `./install.sh cpu` ou `.\INSTALL.ps1 -Profile cpu`.
 
 Le script télécharge les images Docker, les modèles LLM (Qwen 2.5) et embeddings (BGE-M3), génère un mot de passe admin aléatoire, et démarre les services.
 

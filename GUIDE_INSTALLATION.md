@@ -212,14 +212,15 @@ chmod +x install_offline.sh
 ./install_offline.sh
 ```
 
-Options avancees :
+Options avancees (chemin du package explicite) :
 ```bash
-./install_offline.sh chavenay gpu /chemin/vers/package
+./install_offline.sh gpu /chemin/vers/package
 ```
+Le nom d'instance est demande de maniere interactive dans l'etape 1/8.
 
 ### Ce que fait le script
 
-1. **Demande le nom du projet** (sauf si passe en parametre)
+1. **Demande le nom du projet** de maniere interactive
 2. **Cree `C:\RAG\luciole-{nom}\`** avec la structure complete :
    - `data/uploads/` et `data/processed/` pour les documents
    - `config/` avec settings, prompts, auth
@@ -489,11 +490,14 @@ chmod +x /home/luciole/offline_package/manage.sh
 cd /home/luciole/offline_package
 
 # Profil CPU (Hyper-V, VM sans GPU) :
-bash install_offline.sh nom-du-projet cpu
+bash install_offline.sh cpu
 
 # Profil GPU (machine avec NVIDIA + Container Toolkit) :
-bash install_offline.sh nom-du-projet gpu
+bash install_offline.sh gpu
 ```
+
+Le script demande le nom du metier / client de maniere interactive
+dans l'etape 1/8 (ex: chavenay, juridique, rh).
 
 > Note GPU/CPU : si vous n'avez que `luciole-gpu.tar`, passez `cpu` quand meme --
 > le script tague automatiquement l'image gpu en cpu.
