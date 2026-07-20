@@ -389,9 +389,9 @@ sudo bash scripts/install_gx10.sh
 Le script est interactif :
 
 ```
-Pour quel métier / client ? (ex: support, juridique, chavenay) : belacom
+Pour quel métier / client ? (ex: juridique, chavenay, monclient) : support
 
-Ports assignés à l'instance 'belacom' :
+Ports assignés à l'instance 'support' :
    API (agent)    : 8010
    Admin UI       : 8011
    Chat UI        : 8012
@@ -439,18 +439,18 @@ sudo bash scripts/install_gx10.sh
 sudo docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 ```
 
-Résultat attendu (exemple instance belacom, ports 8010-8019) :
+Résultat attendu (exemple instance support, ports 8010-8019) :
 
 ```
 luciole-tensorrt-shared         Up X minutes (healthy)
-luciole-qdrant-belacom          Up X minutes
-luciole-opensearch-belacom      Up X minutes
-luciole-agent-belacom           Up X minutes
-luciole-admin-belacom           Up X minutes
-luciole-chat-belacom            Up X minutes
-luciole-feedback-belacom        Up X minutes
-luciole-watcher-belacom         Up X minutes
-luciole-mail-belacom            Up X minutes (healthy)
+luciole-qdrant-support          Up X minutes
+luciole-opensearch-support      Up X minutes
+luciole-agent-support           Up X minutes
+luciole-admin-support           Up X minutes
+luciole-chat-support            Up X minutes
+luciole-feedback-support        Up X minutes
+luciole-watcher-support         Up X minutes
+luciole-mail-support            Up X minutes (healthy)
 ```
 
 ### Test du LLM partagé
@@ -466,7 +466,7 @@ curl -s http://localhost:8001/v1/chat/completions \
 
 ```bash
 curl -s http://localhost:8010/health
-# {"status": "ok", "instance": "belacom"}
+# {"status": "ok", "instance": "support"}
 ```
 
 ### Accès aux interfaces (local ou réseau)
@@ -512,7 +512,7 @@ Déposer les documents dans le dossier de l'instance :
 
 ```bash
 # ⚠️  RÈGLE CRITIQUE : le sous-dossier doit porter EXACTEMENT le même nom que l'instance
-# Exemple pour l'instance "belacom" : instances/belacom/data/belacom/
+# Exemple pour l'instance "support" : instances/support/data/support/
 # Exemple pour l'instance "juridique" : instances/juridique/data/juridique/
 mkdir -p ~/Documents/luciole-prime-multi/instances/<metier>/data/<metier>/
 cp /path/to/documents/*.pdf \
@@ -522,8 +522,8 @@ cp /path/to/documents/*.pdf \
 > **Pourquoi** : le nom du sous-dossier détermine l'index Qdrant. Si le nom ne correspond pas à `INSTANCE_NAME`,  
 > l'agent ne trouvera aucun résultat (0 vecteurs) et le watcher ne surveillera pas le bon chemin.
 >
-> ❌ `instances/belacom/data/chavenay/` → index `chavenay` — l'agent cherche `belacom` → 0 résultats  
-> ✅ `instances/belacom/data/belacom/` → index `belacom` — correct
+> ❌ `instances/support/data/chavenay/` → index `chavenay` — l'agent cherche `support` → 0 résultats  
+> ✅ `instances/support/data/support/` → index `support` — correct
 
 Depuis l'UI Admin, lancer l'ingestion avec le chemin `/app/data/<metier>`.
 
@@ -572,7 +572,7 @@ sudo bash scripts/list_instances.sh
 ### Arrêter une instance
 
 ```bash
-sudo bash scripts/stop_instance.sh belacom
+sudo bash scripts/stop_instance.sh support
 ```
 
 ### Arrêter le stack LLM partagé
