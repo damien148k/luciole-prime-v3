@@ -1,7 +1,11 @@
 # Dockerfile pour Luciole RAG avec support GPU NVIDIA CUDA
-# Base: nvidia/cuda pour PyTorch avec CUDA
+# Base: nvidia/cuda 12.4 pour PyTorch >=2.6 (requis par CVE-2025-32434)
+#
+# CVE-2025-32434 : torch.load < 2.6 est bloque par transformers >=4.52 meme
+# avec weights_only=True. On pin torch>=2.6 et donc cu124 (cu121 s'arrete a
+# 2.5.1). La RTX A5000 (Ampere, CC 8.6) est parfaitement supportee par cu124.
 
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 LABEL maintainer="Luciole RAG Team"
 LABEL description="API RAG avec support GPU CUDA pour embeddings et reranking"
@@ -36,8 +40,10 @@ WORKDIR /app
 
 COPY setup/requirements-linux-gpu.txt ./requirements.txt
 
+# torch>=2.6.0 requis par transformers>=4.52 suite a CVE-2025-32434.
+# cu124 est la seule fenetre publique x86_64 qui livre torch 2.6.0 en wheels binaires.
 RUN pip install --no-cache-dir --trusted-host download.pytorch.org --trusted-host pypi.org --trusted-host files.pythonhosted.org \
-    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' --index-url https://download.pytorch.org/whl/cu124
 
 RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org \
     -r requirements.txt

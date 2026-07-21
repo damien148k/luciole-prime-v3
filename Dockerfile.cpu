@@ -30,8 +30,9 @@ WORKDIR /app
 
 COPY setup/requirements-linux-cpu.txt ./requirements.txt
 
+# torch>=2.6.0 requis par transformers>=4.52 suite a CVE-2025-32434.
 RUN pip install --no-cache-dir --trusted-host download.pytorch.org --trusted-host pypi.org --trusted-host files.pythonhosted.org \
-    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' --index-url https://download.pytorch.org/whl/cpu
 
 RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org \
     -r requirements.txt

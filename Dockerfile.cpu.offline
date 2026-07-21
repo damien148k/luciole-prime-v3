@@ -31,8 +31,9 @@ WORKDIR /app
 
 COPY pip_packages/ /tmp/pip_packages/
 
+# torch>=2.6.0 requis par transformers>=4.52 suite a CVE-2025-32434.
 RUN pip install --no-cache-dir --no-index --find-links=/tmp/pip_packages/ \
-    torch torchvision torchaudio \
+    'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' \
     && pip install --no-cache-dir --no-index --find-links=/tmp/pip_packages/ \
     -r /tmp/pip_packages/requirements-linux-cpu.txt \
     && rm -rf /tmp/pip_packages/

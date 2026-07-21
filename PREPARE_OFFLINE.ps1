@@ -324,12 +324,14 @@ $ErrorActionPreference = "Continue"
 pip download -r $reqFile -d $pipDir --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | ForEach-Object { if ($_ -notmatch "^(WARNING|ERROR)") { Write-Host "  $_" } }
 
 # Torch separement (gros fichiers)
+# torch>=2.6 requis par transformers>=4.52 suite a CVE-2025-32434.
+# cu124 est la seule fenetre x86_64 qui livre torch 2.6.0 en wheels binaires.
 if ($Profile -eq "cpu") {
-    Write-Host "  Telechargement PyTorch CPU..."
-    pip download torch torchvision torchaudio -d $pipDir --index-url https://download.pytorch.org/whl/cpu --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
+    Write-Host "  Telechargement PyTorch CPU (torch==2.6.0)..."
+    pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d $pipDir --index-url https://download.pytorch.org/whl/cpu --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
 } else {
-    Write-Host "  Telechargement PyTorch CUDA 12.1..."
-    pip download torch torchvision torchaudio -d $pipDir --index-url https://download.pytorch.org/whl/cu121 --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
+    Write-Host "  Telechargement PyTorch CUDA 12.4 (torch==2.6.0)..."
+    pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d $pipDir --index-url https://download.pytorch.org/whl/cu124 --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
 }
 $ErrorActionPreference = "Stop"
 

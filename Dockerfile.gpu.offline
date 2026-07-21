@@ -1,8 +1,9 @@
 # Dockerfile pour Luciole RAG avec support GPU NVIDIA CUDA
 # VERSION OFFLINE — utilise les wheels pre-telecharges dans pip_packages/
+# Base cuda 12.4 pour PyTorch >=2.6 (requis par CVE-2025-32434).
 # Usage: docker build -f Dockerfile.gpu.offline -t luciole-gpu:latest .
 
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 LABEL maintainer="Luciole RAG Team"
 LABEL description="API RAG GPU — build offline depuis pip_packages/"
@@ -36,8 +37,9 @@ WORKDIR /app
 
 COPY pip_packages/ /tmp/pip_packages/
 
+# torch>=2.6.0 requis par transformers>=4.52 suite a CVE-2025-32434.
 RUN pip install --no-cache-dir --no-index --find-links=/tmp/pip_packages/ \
-    torch torchvision torchaudio \
+    'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' \
     && pip install --no-cache-dir --no-index --find-links=/tmp/pip_packages/ \
     -r /tmp/pip_packages/requirements-linux-gpu.txt \
     && rm -rf /tmp/pip_packages/
