@@ -9,7 +9,11 @@
 # Différences vs generic.yaml :
 # - escalate_to_human autorisé (tickets sensibles / sévérité critique)
 # - system_prompt orienté support technique, exige la citation du ticket_id
-# - stop_conditions plus strictes (2 sources minimum) vu la criticité support
+# - stop_conditions : 1 source minimum (citation obligatoire). Un ticket
+#   support correspond en général à un seul incident documenté : exiger
+#   2 sources forçait le LLM à répéter final_answer jusqu'à max_steps
+#   quand une seule source pertinente existait réellement (observé en
+#   test réel sur l'instance Belacom le 2026-07-31, ticket BLM-2025-0314).
 # =============================================================================
 
 name: belacom_support
@@ -40,13 +44,16 @@ system_prompt: |
     (ex: {"editor": "fortinet"}, {"severity": "high"}).
   - Cite toujours le ticket_id des sources utilisées dans ta réponse finale.
   - Si la question évoque une panne critique en production, ou si tu ne
-    trouves pas au moins deux sources pertinentes après recherche, appelle
+    trouves aucune source pertinente après recherche, appelle
     escalate_to_human avec un motif clair plutôt que de répondre au hasard.
+  - Si un premier essai de final_answer est refusé faute de source ou de
+    citation, ne répète jamais le même texte : relance search_documents
+    avec une requête reformulée ou search_multi avant de retenter.
   - Ne jamais inventer de procédure ou de référence matérielle absente des
     documents retrouvés.
 
 stop_conditions:
-  min_sources: 2
+  min_sources: 1
   require_citation: true
 
 # Règle de routage informative (non exécutée automatiquement par
