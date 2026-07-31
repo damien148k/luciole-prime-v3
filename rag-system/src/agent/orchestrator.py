@@ -91,9 +91,92 @@ class AgentOrchestrator:
         query: str,
         profile: Dict,
         history: Optional[List[Dict]] = None,
+        deep_search: bool = False,
     ) -> Dict:
         """
-        Exécute la boucle agentique pour une requête donnée.
+        Point d'entree public. Si deep_search=True et qu'un history non
+        vide est fourni, delegue a _run_deep_search (double passage,
+        etape pre-boucle explicite, jamais choisie par le LLM
+        planificateur). Sinon delegue a _run_single_pass (comportement
+        historique, inchange).
+        """
+        if deep_search and history:
+            return self._run_deep_search(query, profile, history)
+        return self._run_single_pass(query, profile, history)
+
+    def _run_deep_search(self, query: str, profile: Dict, history: List[Dict]) -> Dict:
+        """
+        Double passage complet de la boucle agentique (sans puis avec
+        historique), puis selection du meilleur via une heuristique
+        identique dans l'esprit a _compare_deep_search_results (pipeline
+        classique, agent/api.py) : deux fois plus couteux qu'un passage
+        normal (2x max_steps), donc pilote uniquement par ce parametre
+        explicite, jamais par un tool que le LLM choisirait dynamiquement.
+        """
+        logger.info("Deep search (agent): lancement double passage (frais + contextuel)")
+        result_fresh = self._run_single_pass(query, profile, history=None)
+        result_context = self._run_single_pass(query, profile, history=history)
+
+        best, choice = self._pick_deep_search_result(result_fresh, result_context)
+        logger.info(f"Deep search (agent): resultat retenu = {choice}")
+
+        best = dict(best)
+        best["deep_search"] = {
+            "enabled": True,
+            "choice": choice,
+            "fresh_steps_used": result_fresh["steps_used"],
+            "context_steps_used": result_context["steps_used"],
+            "fresh_sources_count": len(result_fresh.get("sources") or []),
+            "context_sources_count": len(result_context.get("sources") or []),
+        }
+        return best
+
+    @staticmethod
+    def _pick_deep_search_result(result_fresh: Dict, result_context: Dict):
+        """
+        Heuristique de selection pour le deep search de l'agent. Inspiree
+        de _compare_deep_search_results (agent/api.py, pipeline classique)
+        mais adaptee : l'agent n'a pas de score de confidence (final_answer
+        ne produit que text/sources), la comparaison se limite donc aux
+        patterns "pas d'info" et au nombre de sources. Copie locale plutot
+        qu'import croise entre orchestrator.py et api.py.
+        """
+        no_info_patterns = [
+            "pas d'information", "pas trouve", "n'ai pas trouve",
+            "aucune information", "pas de donnees", "information non trouvee",
+            "je ne dispose pas", "pas disponible dans", "documents ne contiennent pas",
+        ]
+
+        def has_no_info(text: str) -> bool:
+            text_lower = (text or "").lower()
+            return any(p in text_lower for p in no_info_patterns)
+
+        response_fresh = result_fresh.get("response", "")
+        response_context = result_context.get("response", "")
+        fresh_no_info = has_no_info(response_fresh)
+        context_no_info = has_no_info(response_context)
+
+        if not fresh_no_info and context_no_info:
+            return result_fresh, "fresh_found"
+        if fresh_no_info and not context_no_info:
+            return result_context, "context_found"
+        if not fresh_no_info and not context_no_info:
+            fresh_sources = len(result_fresh.get("sources") or [])
+            context_sources = len(result_context.get("sources") or [])
+            if fresh_sources >= context_sources:
+                return result_fresh, "fresh_better_score"
+            return result_context, "context_better_score"
+        return result_fresh, "both_no_info"
+
+    def _run_single_pass(
+        self,
+        query: str,
+        profile: Dict,
+        history: Optional[List[Dict]] = None,
+    ) -> Dict:
+        """
+        Corps de la boucle agentique pour un seul passage (sans deep
+        search). Exécute la boucle agentique pour une requête donnée.
 
         Args:
             query: requête utilisateur

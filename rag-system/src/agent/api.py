@@ -119,6 +119,16 @@ class AgentRunRequest(BaseModel):
     )
     index_name: Optional[str] = Field(default=None, description="Nom de l'index à interroger")
     history: List[ChatMessage] = Field(default=[], description="Historique de conversation")
+    deep_search: bool = Field(
+        default=False,
+        description=(
+            "Si True ET qu'un history non vide est fourni, lance deux passages "
+            "complets de la boucle agentique (sans puis avec historique) et "
+            "retient le meilleur, comme /api/query. Ignore si history est vide. "
+            "Deux fois plus couteux (2x max_steps) : jamais choisi dynamiquement "
+            "par le LLM planificateur, seulement par ce parametre explicite."
+        ),
+    )
 
 
 # ============================================================================
@@ -826,6 +836,8 @@ async def agent_run(request: AgentRunRequest):
             Si omis, utilise le profil actif (AGENT_PROFILE, defaut 'generic').
         request.index_name: index a interroger (sinon resolu comme pour /api/analyze).
         request.history: historique de conversation, transmis a l'orchestrateur.
+        request.deep_search: si True et history non vide, double passage
+            (frais + contextuel) puis selection du meilleur, comme /api/query.
     """
     try:
         from src.agent.agent_profiles import load_profile
@@ -841,6 +853,7 @@ async def agent_run(request: AgentRunRequest):
             query=request.query,
             profile=profile,
             history=history,
+            deep_search=request.deep_search,
         )
 
         result["index_name"] = resolved_index
