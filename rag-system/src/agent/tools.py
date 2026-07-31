@@ -37,7 +37,7 @@ class ToolRegistry:
     disponible à tout profil qui l'autorise explicitement.
     """
 
-    def __init__(self, hybrid_search, llm_generator=None):
+    def __init__(self, hybrid_search, llm_generator=None, reranker=None):
         """
         Args:
             hybrid_search: instance de HybridSearch (retrieval/hybrid.py),
@@ -45,9 +45,17 @@ class ToolRegistry:
             llm_generator: instance de LLMGenerator, optionnelle (réservée
                 à d'éventuels tools futurs nécessitant un appel LLM dédié,
                 ex: reformulation). Non utilisée par les tools actuels.
+            reranker: instance de Reranker (retrieval/reranker.py),
+                optionnelle. Si fournie, appliquée apres chaque recherche
+                (search_documents/search_multi) pour aligner la qualite de
+                retrieval de l'agent sur celle du pipeline /api/query, qui
+                reranke deja systematiquement (voir DocumentAnalyzer). Si
+                None ou en cas d'erreur, on retombe silencieusement sur
+                l'ordre RRF brut (jamais d'exception fatale ici).
         """
         self.hybrid_search = hybrid_search
         self.llm_generator = llm_generator
+        self.reranker = reranker
         self._escalations: List[Dict] = []
 
         # Table nom -> (fonction, description, schéma d'arguments)
@@ -182,6 +190,18 @@ class ToolRegistry:
     # IMPLÉMENTATION DES TOOLS
     # =========================================================================
 
+    def _rerank(self, query: str, results: List[Dict], top_k: int) -> List[Dict]:
+        """Applique le reranker si disponible, sinon renvoie les resultats
+        RRF bruts. Ne leve jamais d'exception (repli silencieux avec log),
+        meme comportement defensif que DocumentAnalyzer._analyze_*."""
+        if not self.reranker or not results:
+            return results
+        try:
+            return self.reranker.rerank(query, results)[:top_k]
+        except Exception as e:
+            logger.warning(f"Reranking agent echoue, resultats RRF conserves: {e}")
+            return results
+
     def search_documents(
         self,
         query: str,
@@ -192,6 +212,7 @@ class ToolRegistry:
             raise ToolError("search_documents: 'query' ne peut pas être vide")
 
         results = self.hybrid_search.search(query, top_k=top_k, filters=filters)
+        results = self._rerank(query, results, top_k)
         self._remember_results(results)
         return {
             "count": len(results),
@@ -210,6 +231,7 @@ class ToolRegistry:
             raise ToolError("search_multi non supporté par ce moteur de recherche")
 
         results = self.hybrid_search.search_multi(queries, top_k=top_k, filters=filters)
+        results = self._rerank(queries[0], results, top_k)
         self._remember_results(results)
         return {
             "count": len(results),

@@ -712,8 +712,10 @@ async def analyze(request: AnalyzeRequest):
 def get_orchestrator(index_name: str = None):
     """
     Retourne un AgentOrchestrator pret a l'emploi pour l'index donne, en
-    reutilisant le meme HybridSearch/LLMGenerator que le DocumentAnalyzer
-    (via get_analyzer, deja mis en cache avec son propre TTL).
+    reutilisant le meme HybridSearch/LLMGenerator/Reranker que le
+    DocumentAnalyzer (via get_analyzer, deja mis en cache avec son propre
+    TTL). Le reranker est ainsi applique de la meme facon cote agent que
+    cote pipeline /api/query.
 
     L'orchestrateur est reconstruit si l'analyzer sous-jacent a ete
     reconstruit entre-temps (expiration du TTL ou reload-config), pour ne
@@ -733,6 +735,7 @@ def get_orchestrator(index_name: str = None):
     tool_registry = ToolRegistry(
         hybrid_search=analyzer.hybrid_search,
         llm_generator=analyzer.llm_generator,
+        reranker=analyzer.reranker,
     )
     orchestrator = AgentOrchestrator(
         tool_registry=tool_registry,
