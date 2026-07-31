@@ -90,6 +90,7 @@ class AgentOrchestrator:
 
         trace: List[Dict] = []
         observations: List[str] = []
+        rejected_final_answers: List[str] = []
 
         for step in range(1, max_steps + 1):
             plan_prompt = self._build_plan_prompt(
@@ -151,11 +152,50 @@ class AgentOrchestrator:
                     # Pas assez de sources / pas de citation alors que le
                     # profil l'exige : on redonne une chance en observation
                     # plutôt que de renvoyer une réponse non conforme.
+                    answer_text = str(result.get("text", "")).strip()
+                    is_repeat = answer_text in rejected_final_answers
+                    rejected_final_answers.append(answer_text)
+
+                    if is_repeat and "escalate_to_human" in tools_allowed:
+                        # Le LLM a retenté la même réponse déjà refusée sans
+                        # varier sa stratégie : inutile de consommer le reste
+                        # de max_steps, on force une escalade explicite.
+                        escalate_args = {
+                            "reason": (
+                                "Réponse finale répétée après refus (sources "
+                                "insuffisantes ou citation manquante) sans "
+                                "nouvelle recherche entre les deux tentatives."
+                            )
+                        }
+                        try:
+                            esc_result = self.tools.call(
+                                "escalate_to_human", escalate_args, allowed=tools_allowed
+                            )
+                        except ToolError as e:
+                            esc_result = {"escalated": False, "reason": str(e)}
+                        trace.append({
+                            "step": step,
+                            "tool": "escalate_to_human",
+                            "args": escalate_args,
+                            "result": esc_result,
+                            "duration_ms": 0,
+                            "note": "auto_escalade_repetition_final_answer",
+                        })
+                        return self._finalize(
+                            trace,
+                            "Je n'ai pas assez de sources fiables pour répondre "
+                            "avec certitude, une escalade vers un support humain "
+                            "a été déclenchée.",
+                            [], step, "escalated",
+                        )
+
                     observations.append(
-                        "Ta précédente tentative de réponse finale ne respecte pas "
-                        "les conditions d'arrêt du profil (sources insuffisantes ou "
-                        "citation manquante). Cherche davantage avant de répondre, "
-                        "ou escalade si tu ne trouves pas assez de sources."
+                        f"Ta réponse \"{answer_text[:200]}\" a été refusée : "
+                        "elle ne respecte pas les conditions d'arrêt du profil "
+                        "(sources insuffisantes ou citation manquante). Ne "
+                        "répète pas ce texte tel quel : lance search_documents "
+                        "avec une requête reformulée, essaie search_multi, ou "
+                        "escalade si tu ne trouves vraiment aucune source."
                     )
                     continue
 
