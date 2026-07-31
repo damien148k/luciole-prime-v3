@@ -230,19 +230,43 @@ def _get_embedder():
 
 
 def _get_reranker():
-    """Charge le reranker une seule fois"""
+    """Charge le reranker une seule fois.
+
+    Comportement strict par defaut : si le modele ne charge pas,
+    l'exception remonte et fait echouer toute route qui en depend
+    (chat classique ET agent), au lieu de degrader silencieusement
+    vers une recherche non reranked. C'est voulu : un mode degrade
+    invisible fausserait toute evaluation de qualite (impossible de
+    distinguer un probleme de prompt/pipeline d'une simple absence de
+    reranking).
+
+    Echappatoire explicite : positionner RERANKER_OPTIONAL=true dans
+    l'environnement pour retrouver l'ancien comportement (log un
+    warning, renvoie None, l'appelant tourne sans reranker). A
+    n'utiliser qu'en connaissance de cause (ex: environnement de repli
+    sans GPU dispo), jamais silencieusement en test de qualite.
+    """
     global _reranker
     if _reranker is None:
         config = _get_config()
         from src.retrieval.reranker import Reranker
+        optional = os.environ.get("RERANKER_OPTIONAL", "false").lower() == "true"
         try:
             _reranker = Reranker(
                 model_name=config["reranker"]["model"],
                 device=config["reranker"]["device"],
                 top_n=config["retrieval"].get("rerank_top_n", 10)
             )
+            logger.info("Reranker charge et actif")
         except Exception as e:
-            logger.warning(f"Reranker not available: {e}")
+            if optional:
+                logger.warning(f"Reranker not available (mode degrade autorise via RERANKER_OPTIONAL=true): {e}")
+            else:
+                logger.error(f"Reranker indisponible et RERANKER_OPTIONAL n'est pas active: {e}")
+                raise RuntimeError(
+                    f"Reranker indisponible ({e}). Pour tester/tourner sans reranker "
+                    "(mode degrade explicite), positionner RERANKER_OPTIONAL=true."
+                ) from e
     return _reranker
 
 

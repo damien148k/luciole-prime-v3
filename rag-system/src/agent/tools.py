@@ -190,17 +190,27 @@ class ToolRegistry:
     # IMPLÉMENTATION DES TOOLS
     # =========================================================================
 
-    def _rerank(self, query: str, results: List[Dict], top_k: int) -> List[Dict]:
-        """Applique le reranker si disponible, sinon renvoie les resultats
-        RRF bruts. Ne leve jamais d'exception (repli silencieux avec log),
-        meme comportement defensif que DocumentAnalyzer._analyze_*."""
+    def _rerank(self, query: str, results: List[Dict], top_k: int) -> tuple:
+        """Applique le reranker si disponible.
+
+        Ne leve jamais d'exception a ce niveau (un echec ponctuel du
+        modele pendant l'inference ne doit pas faire crasher une
+        recherche), mais renvoie explicitement si le reranking a eu
+        lieu ou non (was_reranked) pour que ce soit visible dans le
+        resultat du tool et donc dans la trace de l'agent. A la
+        difference de l'absence de reranker au demarrage (bloquante
+        par defaut, voir _get_reranker), ceci couvre uniquement :
+        - le mode degrade explicitement autorise (RERANKER_OPTIONAL=true)
+        - un echec transitoire de l'appel rerank() lui-meme
+        Dans les deux cas l'anomalie doit rester visible, pas masquee.
+        """
         if not self.reranker or not results:
-            return results
+            return results, False
         try:
-            return self.reranker.rerank(query, results)[:top_k]
+            return self.reranker.rerank(query, results)[:top_k], True
         except Exception as e:
             logger.warning(f"Reranking agent echoue, resultats RRF conserves: {e}")
-            return results
+            return results, False
 
     def search_documents(
         self,
@@ -212,11 +222,12 @@ class ToolRegistry:
             raise ToolError("search_documents: 'query' ne peut pas être vide")
 
         results = self.hybrid_search.search(query, top_k=top_k, filters=filters)
-        results = self._rerank(query, results, top_k)
+        results, was_reranked = self._rerank(query, results, top_k)
         self._remember_results(results)
         return {
             "count": len(results),
             "results": self._summarize_results(results),
+            "reranked": was_reranked,
         }
 
     def search_multi(
@@ -231,11 +242,12 @@ class ToolRegistry:
             raise ToolError("search_multi non supporté par ce moteur de recherche")
 
         results = self.hybrid_search.search_multi(queries, top_k=top_k, filters=filters)
-        results = self._rerank(queries[0], results, top_k)
+        results, was_reranked = self._rerank(queries[0], results, top_k)
         self._remember_results(results)
         return {
             "count": len(results),
             "results": self._summarize_results(results),
+            "reranked": was_reranked,
         }
 
     def get_document(self, file_name_or_path: str) -> Dict:
