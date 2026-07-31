@@ -45,25 +45,35 @@ class HybridSearch:
         
         logger.info(f"HybridSearch initialized: bm25_weight={bm25_weight}, dense_weight={dense_weight}, bm25_top_k={bm25_top_k}, dense_top_k={dense_top_k}")
     
-    def search(self, query: str, top_k: int = 30) -> List[Dict]:
+    def search(self, query: str, top_k: int = 30, filters: Dict = None) -> List[Dict]:
         """
         Perform hybrid search combining BM25 and dense search
         
         Args:
             query: Search query
             top_k: Number of final results to return after fusion
+            filters: Filtres métier optionnels sur les champs YAML front
+                matter propagés à la racine des documents/payloads
+                (client, editor, technology, product, version,
+                support_type, severity, ticket_id, projet, phase,
+                thematique, departement). Format simple :
+                {"editor": "fortinet"} ou {"severity": ["high", "medium"]}.
+                Appliqué identiquement sur BM25 (OpenSearch) et Dense
+                (Qdrant) avant la fusion RRF, donc les deux classements
+                ne portent que sur le sous-ensemble filtré.
             
         Returns:
             List of fused search results
         """
         # Get results from both search methods using configured top_k
-        bm25_results = self.bm25_search.search(query, top_k=self.bm25_top_k)
-        dense_results = self.dense_search.search(query, top_k=self.dense_top_k)
+        bm25_results = self.bm25_search.search(query, top_k=self.bm25_top_k, filters=filters)
+        dense_results = self.dense_search.search(query, top_k=self.dense_top_k, filters=filters)
         
         # Apply RRF fusion
         fused_results = self._rrf_fusion(bm25_results, dense_results, top_k)
         
-        logger.info(f"Hybrid search: BM25={len(bm25_results)}, Dense={len(dense_results)}, Fused={len(fused_results)}")
+        filter_info = f", filters={filters}" if filters else ""
+        logger.info(f"Hybrid search: BM25={len(bm25_results)}, Dense={len(dense_results)}, Fused={len(fused_results)}{filter_info}")
         return fused_results
     
     def _rrf_fusion(
@@ -117,7 +127,7 @@ class HybridSearch:
         
         return results
     
-    def search_multi(self, queries: List[str], top_k: int = 30) -> List[Dict]:
+    def search_multi(self, queries: List[str], top_k: int = 30, filters: Dict = None) -> List[Dict]:
         """
         Perform hybrid search with multiple query variants.
         Runs search for each query, deduplicates by chunk_id keeping best score.
@@ -125,6 +135,8 @@ class HybridSearch:
         Args:
             queries: List of query variants
             top_k: Number of final results to return
+            filters: Filtres métier optionnels, appliqués identiquement à
+                chaque variante de requête (voir `search` pour le format)
             
         Returns:
             List of fused search results (deduplicated, best score per chunk)
@@ -132,13 +144,13 @@ class HybridSearch:
         if not queries:
             return []
         if len(queries) == 1:
-            return self.search(queries[0], top_k=top_k)
+            return self.search(queries[0], top_k=top_k, filters=filters)
         
         # Run hybrid search for each query variant
         all_results = {}  # chunk_id -> best result
         
         for i, query in enumerate(queries):
-            results = self.search(query, top_k=top_k)
+            results = self.search(query, top_k=top_k, filters=filters)
             for result in results:
                 chunk_id = result.get("chunk_id")
                 if not chunk_id:
@@ -161,15 +173,20 @@ class HybridSearch:
         )
         return sorted_results[:top_k]
     
-    def search_with_details(self, query: str, top_k: int = 30) -> Tuple[List[Dict], Dict]:
+    def search_with_details(self, query: str, top_k: int = 30, filters: Dict = None) -> Tuple[List[Dict], Dict]:
         """
         Search with detailed breakdown of results
+        
+        Args:
+            query: Search query
+            top_k: Number of final results to return after fusion
+            filters: Filtres métier optionnels (voir `search` pour le format)
         
         Returns:
             Tuple of (fused_results, details_dict)
         """
-        bm25_results = self.bm25_search.search(query, top_k=self.bm25_top_k)
-        dense_results = self.dense_search.search(query, top_k=self.dense_top_k)
+        bm25_results = self.bm25_search.search(query, top_k=self.bm25_top_k, filters=filters)
+        dense_results = self.dense_search.search(query, top_k=self.dense_top_k, filters=filters)
         fused_results = self._rrf_fusion(bm25_results, dense_results, top_k)
         
         details = {

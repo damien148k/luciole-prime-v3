@@ -38,14 +38,26 @@ class DenseSearch:
         
         logger.info(f"DenseSearch initialized: {host}:{port}/{collection_name}")
     
-    def search(self, query: str, top_k: int = 20, filter_conditions: Dict = None) -> List[Dict]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 20,
+        filter_conditions: Dict = None,
+        filters: Dict = None
+    ) -> List[Dict]:
         """
         Search documents using dense vectors via HTTP API
         
         Args:
             query: Search query
             top_k: Number of results to return
-            filter_conditions: Optional filter conditions
+            filter_conditions: Filtre Qdrant natif (format brut de l'API
+                Qdrant, ex: {"must": [{"key": "editor", "match": {"value": "fortinet"}}]}).
+                Prioritaire si fourni en plus de `filters`.
+            filters: Filtres métier simplifiés (ex: {"editor": "fortinet",
+                "severity": ["high", "medium"]}), traduits automatiquement
+                vers le format Qdrant natif sur les champs payload indexés
+                en keyword. Ignoré si `filter_conditions` est aussi fourni.
             
         Returns:
             List of search results with scores
@@ -63,8 +75,9 @@ class DenseSearch:
             "with_payload": True
         }
         
-        if filter_conditions:
-            search_request["filter"] = filter_conditions
+        effective_filter = filter_conditions or self._build_qdrant_filter(filters)
+        if effective_filter:
+            search_request["filter"] = effective_filter
         
         try:
             # Appel HTTP direct à l'API Qdrant v1.7
@@ -96,6 +109,46 @@ class DenseSearch:
             logger.error(f"Dense search error: {e}")
             return []
     
+    @staticmethod
+    def _build_qdrant_filter(filters: dict = None) -> dict:
+        """
+        Traduit un dict de filtres metier simple vers le format de
+        filtre natif Qdrant, sur les champs payload indexes en keyword
+        (voir METADATA_FILTERABLE_FIELDS dans ingestion/pipeline.py).
+
+        Args:
+            filters: dict {champ: valeur} ou {champ: [valeurs]}. Une
+                valeur liste applique un OR (should), une valeur simple
+                un match exact. Toutes les cles sont combinees en AND (must).
+
+        Returns:
+            Filtre au format Qdrant ({"must": [...]})  ou None si vide.
+        """
+        if not filters:
+            return None
+
+        must_conditions = []
+        for field, value in filters.items():
+            if value is None:
+                continue
+            if isinstance(value, (list, tuple, set)):
+                values = [v for v in value if v is not None]
+                if not values:
+                    continue
+                if len(values) == 1:
+                    must_conditions.append({"key": field, "match": {"value": values[0]}})
+                else:
+                    must_conditions.append({
+                        "key": field,
+                        "match": {"any": list(values)}
+                    })
+            else:
+                must_conditions.append({"key": field, "match": {"value": value}})
+
+        if not must_conditions:
+            return None
+        return {"must": must_conditions}
+
     def health_check(self) -> bool:
         """Check if Qdrant is available"""
         try:
