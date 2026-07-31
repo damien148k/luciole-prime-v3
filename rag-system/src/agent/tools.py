@@ -426,3 +426,25 @@ class ToolRegistry:
         escalade, lire sa trace, pas cette liste.
         """
         return list(self._escalations)
+
+    def get_seen_results(self) -> List[Dict]:
+        """Retourne les chunks bruts rencontres pendant cette execution
+        (accumules par toutes les recherches successives de la boucle),
+        pour affichage cote UI (ex: passages dans la sidebar du chat).
+        Acces public volontaire plutot que de lire _seen_results
+        directement depuis l'exterieur (api.py), pour ne pas coupler
+        les appelants a un attribut prive."""
+        if not hasattr(self, "_seen_results"):
+            return []
+        return list(self._seen_results.values())
+
+    def reset_run_state(self) -> None:
+        """Remet a zero l'etat accumule pendant une execution (escalades,
+        chunks vus). A appeler en debut de chaque run() : le ToolRegistry
+        est reutilise en singleton entre requetes (voir get_orchestrator()
+        dans api.py), donc sans ce reset get_escalations()/get_seen_results()
+        continueraient de renvoyer des donnees de requetes precedentes sur
+        le meme index. Corrige un etat partage preexistant, decouvert en
+        construisant l'exposition des passages pour /api/agent/run (PR C)."""
+        self._escalations = []
+        self._seen_results = {}

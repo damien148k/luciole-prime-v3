@@ -985,8 +985,8 @@ body::after{
         <select class="field-select" id="indexSelectMirror" onchange="onIndexMirrorChange()"></select>
       </div>
       <div class="field">
-        <label class="field-label">Top K passages : <span id="topKLabel" style="color:var(--gold)">20</span></label>
-        <select class="field-select" id="topKSelect" onchange="document.getElementById('topKLabel').textContent=this.value">
+        <label class="field-label">Top K passages : <span id="topKLabel" style="color:var(--gold)">20</span> <span style="opacity:.6;font-size:.85em">(non applicable en mode agent)</span></label>
+        <select class="field-select" id="topKSelect" disabled onchange="document.getElementById('topKLabel').textContent=this.value">
           <option value="3">3</option>
           <option value="5">5</option>
           <option value="10">10</option>
@@ -1765,7 +1765,23 @@ async def get_indexes():
 
 @app.post("/api/query")
 async def query(request: ChatRequest):
-    """Proxy vers l'API agent pour les requêtes"""
+    """
+    Proxy vers l'API agent pour les requetes.
+
+    PR C (chantier chat-sur-agent) : bascule de /api/query (pipeline
+    procedural classique) vers /api/agent/run (boucle agentique bornee).
+    request.enable_rewriting n'est plus transmis : le query rewriting
+    est toujours actif cote agent (parametre __init__ de
+    AgentOrchestrator, pas un flag par requete comme cote classique) ;
+    aucune equivalence directe, ecart mineur documente dans le rapport
+    PR C. request.top_k n'est pas non plus transmis : cote agent c'est
+    le LLM planificateur qui choisit top_k a chaque recherche, choix
+    valide explicitement pour ne pas contraindre la boucle (voir
+    discussion PR C). Le profil agentique utilise est celui resolu par
+    la variable d'environnement AGENT_PROFILE du conteneur agent (pas
+    de champ profile ici : /api/agent/run retombe sur ce defaut).
+    Rollback : voir tag v3.0-chat-classic (etat avant tout ce chantier).
+    """
     try:
         # Convertir l'historique en format dict
         history_list = [{"role": msg.role, "content": msg.content} for msg in request.history] if request.history else []
@@ -1774,13 +1790,11 @@ async def query(request: ChatRequest):
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
-                f"{AGENT_URL}/api/query",
+                f"{AGENT_URL}/api/agent/run",
                 json={
                     "query": request.query,
                     "index_name": request.index_name,
-                    "top_k": request.top_k,
                     "custom_prompt": request.custom_prompt,
-                    "enable_rewriting": request.enable_rewriting,
                     "deep_search": request.deep_search,
                     "history": history_list
                 }

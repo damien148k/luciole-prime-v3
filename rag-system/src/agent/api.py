@@ -129,6 +129,15 @@ class AgentRunRequest(BaseModel):
             "par le LLM planificateur, seulement par ce parametre explicite."
         ),
     )
+    custom_prompt: Optional[str] = Field(
+        default=None,
+        description=(
+            "Instruction ponctuelle optionnelle pour cette requete, comme "
+            "/api/query. Concatenee au system_prompt du profil pour cet "
+            "appel uniquement, le profil charge depuis config/agent_profiles/ "
+            "n'est jamais modifie."
+        ),
+    )
 
 
 # ============================================================================
@@ -854,11 +863,53 @@ async def agent_run(request: AgentRunRequest):
             profile=profile,
             history=history,
             deep_search=request.deep_search,
+            custom_prompt=request.custom_prompt,
         )
 
         result["index_name"] = resolved_index
         result["profile_name"] = profile.get("name")
+        result["mode"] = result.get("result_type", "agentic")
         _elapsed_ms = int((time.time() - _t0) * 1000)
+        result["processing_time_ms"] = _elapsed_ms
+
+        # Passages formates pour affichage (sidebar chat_ui.py), meme
+        # format que /api/query : texte tronque a 1000 caracteres, score
+        # arrondi, page/section si presents dans les metadonnees.
+        raw_results = result.pop("raw_search_results", [])
+        passages = []
+        for chunk in raw_results[:30]:
+            p = {
+                "text": (chunk.get("text") or chunk.get("content") or "")[:1000],
+                "file_name": chunk.get("file_name", ""),
+                "score": round(chunk.get("rrf_score", chunk.get("score", 0)) or 0, 4),
+            }
+            meta = chunk.get("metadata", {}) or {}
+            if meta.get("page"):
+                p["page"] = meta["page"]
+            if meta.get("section"):
+                p["section"] = meta["section"]
+            passages.append(p)
+        result["passages"] = passages
+
+        # query_rewriting : meme forme que /api/query (le frontend lit ce
+        # nom de champ, pas query_rewritten expose par l'orchestrateur).
+        # La valeur reecrite elle-meme n'est exposee que dans trace[0]
+        # (entree "query_rewriting" ajoutee en etape pre-boucle, cf PR A) :
+        # l'orchestrateur n'expose que le booleen query_rewritten au niveau
+        # racine du resultat.
+        if result.get("query_rewritten"):
+            rewritten_value = request.query
+            for step in result.get("trace", []):
+                if step.get("tool") == "query_rewriting":
+                    variants = step.get("result", {}).get("rewritten_queries") or []
+                    if variants:
+                        rewritten_value = variants[0]
+                    break
+            result["query_rewriting"] = {
+                "original": request.query,
+                "rewritten": rewritten_value,
+                "type": result.get("query_type", "general"),
+            }
 
         _log_agent_run(
             profile_name=profile.get("name"),

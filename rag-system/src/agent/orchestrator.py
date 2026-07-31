@@ -92,6 +92,7 @@ class AgentOrchestrator:
         profile: Dict,
         history: Optional[List[Dict]] = None,
         deep_search: bool = False,
+        custom_prompt: Optional[str] = None,
     ) -> Dict:
         """
         Point d'entree public. Si deep_search=True et qu'un history non
@@ -99,12 +100,23 @@ class AgentOrchestrator:
         etape pre-boucle explicite, jamais choisie par le LLM
         planificateur). Sinon delegue a _run_single_pass (comportement
         historique, inchange).
+
+        custom_prompt: instruction ponctuelle fournie par l'utilisateur
+        pour cette requete precise (equivalent agent du custom_prompt
+        de /api/query). Concatenee au system_prompt du profil pour cet
+        appel, sans modifier le profil lui-meme.
         """
         if deep_search and history:
-            return self._run_deep_search(query, profile, history)
-        return self._run_single_pass(query, profile, history)
+            return self._run_deep_search(query, profile, history, custom_prompt)
+        return self._run_single_pass(query, profile, history, custom_prompt)
 
-    def _run_deep_search(self, query: str, profile: Dict, history: List[Dict]) -> Dict:
+    def _run_deep_search(
+        self,
+        query: str,
+        profile: Dict,
+        history: List[Dict],
+        custom_prompt: Optional[str] = None,
+    ) -> Dict:
         """
         Double passage complet de la boucle agentique (sans puis avec
         historique), puis selection du meilleur via une heuristique
@@ -114,8 +126,8 @@ class AgentOrchestrator:
         explicite, jamais par un tool que le LLM choisirait dynamiquement.
         """
         logger.info("Deep search (agent): lancement double passage (frais + contextuel)")
-        result_fresh = self._run_single_pass(query, profile, history=None)
-        result_context = self._run_single_pass(query, profile, history=history)
+        result_fresh = self._run_single_pass(query, profile, history=None, custom_prompt=custom_prompt)
+        result_context = self._run_single_pass(query, profile, history=history, custom_prompt=custom_prompt)
 
         best, choice = self._pick_deep_search_result(result_fresh, result_context)
         logger.info(f"Deep search (agent): resultat retenu = {choice}")
@@ -173,6 +185,7 @@ class AgentOrchestrator:
         query: str,
         profile: Dict,
         history: Optional[List[Dict]] = None,
+        custom_prompt: Optional[str] = None,
     ) -> Dict:
         """
         Corps de la boucle agentique pour un seul passage (sans deep
@@ -203,7 +216,22 @@ class AgentOrchestrator:
             "Tu es un agent Luciole. Utilise les outils disponibles pour "
             "rassembler des informations avant de répondre. Cite tes sources."
         )
+        if custom_prompt:
+            # Instruction ponctuelle utilisateur (equivalent agent du
+            # custom_prompt de /api/query) : concatenee au system_prompt
+            # du profil pour cet appel precis, le profil lui-meme n'est
+            # jamais modifie.
+            system_prompt = (
+                f"{system_prompt}\n\nInstruction supplementaire pour cette "
+                f"requete : {custom_prompt.strip()}"
+            )
         stop_conditions = profile.get("stop_conditions", {}) or {}
+
+        # Le ToolRegistry est reutilise en singleton entre requetes (voir
+        # get_orchestrator() dans api.py) : sans ce reset, escalades et
+        # chunks vus de requetes precedentes (ou du passage "fresh" en cas
+        # de deep search) pollueraient ce passage.
+        self.tools.reset_run_state()
 
         available = self.tools.available_tools(allowed=tools_allowed)
         for exit_tool in TERMINAL_TOOLS_ALWAYS_AVAILABLE:
@@ -697,6 +725,7 @@ Aucun texte avant ou après le JSON."""
             "result_type": "agentic",
             "response": response_text,
             "sources": sources,
+            "raw_search_results": self.tools.get_seen_results(),
             "escalated": len(escalations) > 0,
             "escalation_reason": escalations[0]["reason"] if escalations else None,
             "trace": trace,
@@ -711,6 +740,7 @@ Aucun texte avant ou après le JSON."""
             "result_type": "agentic",
             "response": f"Une erreur est survenue pendant le traitement agentique: {message}",
             "sources": [],
+            "raw_search_results": self.tools.get_seen_results(),
             "escalated": False,
             "escalation_reason": None,
             "trace": trace,
