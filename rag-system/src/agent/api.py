@@ -382,6 +382,20 @@ def _init_query_history_db():
             timestamp TEXT, index_name TEXT, question TEXT,
             faithfulness REAL, answer_relevancy REAL, context_recall REAL
         )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS agent_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            profile_name TEXT,
+            index_name TEXT,
+            question TEXT,
+            answer TEXT,
+            sources TEXT,
+            trace TEXT,
+            steps_used INTEGER,
+            stopped_reason TEXT,
+            escalated INTEGER DEFAULT 0,
+            processing_time_ms INTEGER
+        )""")
 
 
 try:
@@ -408,6 +422,36 @@ def _log_query(question: str, answer: str, sources: list, index_name: str,
             )
     except Exception as e:
         logger.warning(f"Failed to log query for RAGAS: {e}")
+
+
+def _log_agent_run(profile_name: str, index_name: str, question: str, result: dict,
+                    processing_time_ms: int = 0):
+    """Enregistre une execution agentique complete (trace, escalade, etc.)
+    pour alimenter l'onglet Agents de l'UI Admin (visualiseur de trace,
+    compteur d'escalades)."""
+    try:
+        with sqlite3.connect(_QUERY_HISTORY_DB) as conn:
+            conn.execute(
+                """INSERT INTO agent_runs
+                (timestamp, profile_name, index_name, question, answer, sources,
+                 trace, steps_used, stopped_reason, escalated, processing_time_ms)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    datetime.now().isoformat(),
+                    profile_name,
+                    index_name,
+                    question,
+                    result.get("response", ""),
+                    json.dumps(result.get("sources", []), ensure_ascii=False),
+                    json.dumps(result.get("trace", []), ensure_ascii=False),
+                    result.get("steps_used"),
+                    result.get("stopped_reason"),
+                    1 if result.get("escalated") else 0,
+                    processing_time_ms,
+                )
+            )
+    except Exception as e:
+        logger.warning(f"Failed to log agent run: {e}")
 
 
 # ============================================================================
@@ -718,6 +762,7 @@ async def agent_run(request: AgentRunRequest):
     try:
         from src.agent.agent_profiles import load_profile
 
+        _t0 = time.time()
         resolved_index = _resolve_index_name(request.index_name)
         profile = load_profile(request.profile) if request.profile else load_profile()
         orchestrator = get_orchestrator(index_name=resolved_index)
@@ -732,6 +777,15 @@ async def agent_run(request: AgentRunRequest):
 
         result["index_name"] = resolved_index
         result["profile_name"] = profile.get("name")
+        _elapsed_ms = int((time.time() - _t0) * 1000)
+
+        _log_agent_run(
+            profile_name=profile.get("name"),
+            index_name=resolved_index,
+            question=request.query,
+            result=result,
+            processing_time_ms=_elapsed_ms,
+        )
 
         _log_query(
             question=request.query,
@@ -1119,6 +1173,172 @@ async def get_query_history(limit: int = 50):
         return {"queries": [dict(r) for r in rows]}
     except Exception as e:
         return {"queries": [], "error": str(e)}
+
+
+# ============================================================================
+# Agent Profiles & Runs (pour l'onglet Agents de l'UI Admin)
+# ============================================================================
+
+@app.get("/api/agent/profiles")
+async def list_agent_profiles():
+    """Liste les profils agentiques disponibles (fichiers YAML dans
+    config/agent_profiles/), avec le profil actuellement actif signale."""
+    try:
+        from src.agent.agent_profiles import list_available_profiles
+        import os as _os
+
+        names = list_available_profiles()
+        active = _os.environ.get("AGENT_PROFILE", "generic")
+        return {"profiles": names, "active": active}
+    except Exception as e:
+        logger.error(f"list_agent_profiles error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _agent_profile_path(profile_name: str) -> str:
+    """Resout le chemin du fichier YAML d'un profil agentique, meme logique
+    que agent_profiles._candidate_paths mais expose ici pour lecture/ecriture
+    depuis l'UI Admin."""
+    safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "", profile_name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Nom de profil invalide")
+    candidates = [
+        os.path.join("config", "agent_profiles", f"{safe_name}.yaml"),
+        os.path.join("/app", "config", "agent_profiles", f"{safe_name}.yaml"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return candidates[0]
+
+
+@app.get("/api/agent/profiles/{profile_name}")
+async def get_agent_profile_yaml(profile_name: str):
+    """Retourne le contenu brut du YAML d'un profil, pour l'editeur inline."""
+    path = _agent_profile_path(profile_name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail=f"Profil '{profile_name}' introuvable")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return {"profile_name": profile_name, "path": path, "content": content}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AgentProfileUpdate(BaseModel):
+    content: str = Field(..., description="Contenu YAML complet du profil")
+
+
+@app.post("/api/agent/profiles/{profile_name}")
+async def save_agent_profile_yaml(profile_name: str, request: AgentProfileUpdate):
+    """Enregistre le YAML edite d'un profil, apres validation de sa syntaxe
+    et de la presence des cles requises. N'ecrit rien si la validation echoue."""
+    from src.agent.agent_profiles import REQUIRED_KEYS
+
+    try:
+        parsed = yaml.safe_load(request.content) or {}
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"YAML invalide: {e}")
+
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="Le YAML doit decrire un objet (mapping)")
+
+    missing = [k for k in REQUIRED_KEYS if k not in parsed]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Cles obligatoires manquantes: {missing}")
+
+    path = _agent_profile_path(profile_name)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(request.content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    from src.agent.agent_profiles import reload_active_profile
+    try:
+        if os.environ.get("AGENT_PROFILE", "generic") == profile_name:
+            reload_active_profile(profile_name)
+    except Exception as e:
+        logger.warning(f"Rechargement du profil actif apres sauvegarde impossible: {e}")
+
+    return {"status": "ok", "profile_name": profile_name, "path": path}
+
+
+@app.get("/api/agent/runs")
+async def get_agent_runs(limit: int = 50, profile: Optional[str] = None):
+    """Historique des executions agentiques (pour le visualiseur de trace).
+    Filtrable par profil."""
+    try:
+        with sqlite3.connect(_QUERY_HISTORY_DB) as conn:
+            conn.row_factory = sqlite3.Row
+            if profile:
+                rows = conn.execute(
+                    "SELECT id, timestamp, profile_name, index_name, question, answer, sources, "
+                    "trace, steps_used, stopped_reason, escalated, processing_time_ms "
+                    "FROM agent_runs WHERE profile_name = ? ORDER BY id DESC LIMIT ?",
+                    (profile, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, timestamp, profile_name, index_name, question, answer, sources, "
+                    "trace, steps_used, stopped_reason, escalated, processing_time_ms "
+                    "FROM agent_runs ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+
+        runs = []
+        for r in rows:
+            run = dict(r)
+            for field in ("sources", "trace"):
+                try:
+                    run[field] = json.loads(run[field]) if run[field] else []
+                except (TypeError, ValueError):
+                    run[field] = []
+            run["escalated"] = bool(run["escalated"])
+            runs.append(run)
+        return {"runs": runs}
+    except Exception as e:
+        return {"runs": [], "error": str(e)}
+
+
+@app.get("/api/agent/stats")
+async def get_agent_stats(profile: Optional[str] = None):
+    """Statistiques agregees pour le tableau de bord de l'onglet Agents :
+    nombre total d'executions, nombre et taux d'escalade, repartition par
+    stopped_reason."""
+    try:
+        with sqlite3.connect(_QUERY_HISTORY_DB) as conn:
+            conn.row_factory = sqlite3.Row
+            where = "WHERE profile_name = ?" if profile else ""
+            params = (profile,) if profile else ()
+
+            total = conn.execute(
+                f"SELECT COUNT(*) as n FROM agent_runs {where}", params
+            ).fetchone()["n"]
+            escalated = conn.execute(
+                f"SELECT COUNT(*) as n FROM agent_runs {where}{' AND' if where else 'WHERE'} escalated = 1",
+                params,
+            ).fetchone()["n"]
+            reasons = conn.execute(
+                f"SELECT stopped_reason, COUNT(*) as n FROM agent_runs {where} "
+                "GROUP BY stopped_reason", params,
+            ).fetchall()
+            avg_steps = conn.execute(
+                f"SELECT AVG(steps_used) as avg_steps FROM agent_runs {where}", params
+            ).fetchone()["avg_steps"]
+
+        return {
+            "total_runs": total,
+            "escalated_count": escalated,
+            "escalation_rate": round(escalated / total, 3) if total else 0,
+            "stopped_reasons": {row["stopped_reason"] or "inconnu": row["n"] for row in reasons},
+            "avg_steps_used": round(avg_steps, 2) if avg_steps is not None else None,
+        }
+    except Exception as e:
+        return {"total_runs": 0, "escalated_count": 0, "escalation_rate": 0,
+                "stopped_reasons": {}, "avg_steps_used": None, "error": str(e)}
 
 
 @app.get("/api/cache/stats")
