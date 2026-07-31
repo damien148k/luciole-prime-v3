@@ -107,6 +107,20 @@ class QueryRequest(BaseModel):
     history: List[ChatMessage] = Field(default=[], description="Historique de conversation")
 
 
+class AgentRunRequest(BaseModel):
+    query: str = Field(..., description="Question utilisateur")
+    profile: Optional[str] = Field(
+        default=None,
+        description=(
+            "Nom du profil agentique à utiliser (ex: 'belacom_support'). "
+            "Si omis, utilise le profil actif (variable d'environnement AGENT_PROFILE, "
+            "défaut 'generic')."
+        )
+    )
+    index_name: Optional[str] = Field(default=None, description="Nom de l'index à interroger")
+    history: List[ChatMessage] = Field(default=[], description="Historique de conversation")
+
+
 # ============================================================================
 # Global instances (lazy loading)
 # ============================================================================
@@ -119,6 +133,7 @@ _llm_generator = None
 _reranker = None
 _query_rewriter = None
 _config = None
+_orchestrators = {}        # Cache par index_name (AgentOrchestrator reutilise le meme LLM/ToolRegistry)
 
 # ============================================================================
 # Index unique par instance (règle: 1 instance = 1 métier = 1 index)
@@ -416,7 +431,7 @@ async def reload_config():
     Réinitialise les singletons : config, LLM, query rewriter, analyzers.
     Les modèles GPU (embedder, reranker) ne sont PAS rechargés (trop coûteux).
     """
-    global _config, _llm_generator, _query_rewriter, _analyzers
+    global _config, _llm_generator, _query_rewriter, _analyzers, _orchestrators
     
     try:
         # 1. Reset settings.yaml cache
@@ -465,6 +480,10 @@ async def reload_config():
         # 6. Vider le cache des analyzers (seront recréés avec la nouvelle config)
         _analyzers.clear()
         logger.info("✅ Cache analyzers vidé")
+
+        # 6bis. Vider le cache des orchestrateurs agentiques (même raison)
+        _orchestrators.clear()
+        logger.info("✅ Cache orchestrateurs agentiques vidé")
         
         logger.info("🔄 Configuration rechargée avec succès !")
         return {
@@ -643,6 +662,88 @@ async def analyze(request: AnalyzeRequest):
         
     except Exception as e:
         logger.error(f"Analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def get_orchestrator(index_name: str = None):
+    """
+    Retourne un AgentOrchestrator pret a l'emploi pour l'index donne, en
+    reutilisant le meme HybridSearch/LLMGenerator que le DocumentAnalyzer
+    (via get_analyzer, deja mis en cache avec son propre TTL).
+
+    L'orchestrateur est reconstruit si l'analyzer sous-jacent a ete
+    reconstruit entre-temps (expiration du TTL ou reload-config), pour ne
+    jamais garder de reference perimee vers un ancien HybridSearch/LLM.
+    """
+    resolved_index = _resolve_index_name(index_name)
+
+    analyzer = get_analyzer(index_name=resolved_index)
+
+    cached = _orchestrators.get(resolved_index)
+    if cached is not None and cached["analyzer"] is analyzer:
+        return cached["orchestrator"]
+
+    from src.agent.tools import ToolRegistry
+    from src.agent.orchestrator import AgentOrchestrator
+
+    tool_registry = ToolRegistry(
+        hybrid_search=analyzer.hybrid_search,
+        llm_generator=analyzer.llm_generator,
+    )
+    orchestrator = AgentOrchestrator(
+        tool_registry=tool_registry,
+        llm_generator=analyzer.llm_generator,
+    )
+    _orchestrators[resolved_index] = {"analyzer": analyzer, "orchestrator": orchestrator}
+    return orchestrator
+
+
+@app.post("/api/agent/run")
+async def agent_run(request: AgentRunRequest):
+    """
+    Point d'entree du mode agentique (boucle bornee plan/act/observe).
+
+    Mode additionnel a /api/analyze : ne remplace pas le pipeline
+    procedural existant (DocumentAnalyzer._analyze_chat et consorts).
+    A utiliser pour les instances/questions ou un enchainement de plusieurs
+    recherches, une verification croisee ou une escalade humaine
+    conditionnelle sont necessaires (voir profils dans config/agent_profiles/).
+
+    Args:
+        request.profile: nom du profil agentique (ex: 'belacom_support').
+            Si omis, utilise le profil actif (AGENT_PROFILE, defaut 'generic').
+        request.index_name: index a interroger (sinon resolu comme pour /api/analyze).
+        request.history: historique de conversation, transmis a l'orchestrateur.
+    """
+    try:
+        from src.agent.agent_profiles import load_profile
+
+        resolved_index = _resolve_index_name(request.index_name)
+        profile = load_profile(request.profile) if request.profile else load_profile()
+        orchestrator = get_orchestrator(index_name=resolved_index)
+
+        history = [msg.dict() for msg in request.history] if request.history else None
+
+        result = orchestrator.run(
+            query=request.query,
+            profile=profile,
+            history=history,
+        )
+
+        result["index_name"] = resolved_index
+        result["profile_name"] = profile.get("name")
+
+        _log_query(
+            question=request.query,
+            answer=result.get("response", ""),
+            sources=result.get("sources", []),
+            index_name=resolved_index,
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Agent run error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
