@@ -20,6 +20,15 @@ from .parsers import DocumentParser
 from .chunker import Chunker, Chunk
 from .embedder import Embedder
 
+# Champs metier extraits du YAML front matter (MarkdownParser), propages
+# au niveau racine des payloads Qdrant et des documents OpenSearch pour
+# permettre le filtrage direct (editor=fortinet, client=belacom, etc.)
+METADATA_FILTERABLE_FIELDS = (
+    "client", "editor", "technology", "product", "version",
+    "support_type", "severity", "ticket_id", "date",
+    "projet", "phase", "thematique", "departement",
+)
+
 # Extensions d'images supportées pour indexation des métadonnées
 IMAGE_EXTENSIONS = {
     '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', 
@@ -211,6 +220,26 @@ class IngestionPipeline:
                 )
             )
             logger.info(f"Created Qdrant collection: {collection_name}")
+
+            # Payload indexes sur les champs metier (YAML front matter)
+            # pour un filtrage rapide (editor=fortinet, client=belacom, etc.)
+            indexed_count = 0
+            for field in METADATA_FILTERABLE_FIELDS:
+                if field == "date":
+                    continue  # date : filtres range geres cote applicatif, pas d'index keyword
+                try:
+                    self.qdrant.create_payload_index(
+                        collection_name=collection_name,
+                        field_name=field,
+                        field_schema="keyword",
+                    )
+                    indexed_count += 1
+                except Exception as e:
+                    logger.debug(f"Payload index {field} deja present ou echec benin : {e}")
+            logger.info(
+                f"Payload indexes crees sur {collection_name} pour "
+                f"{indexed_count} champs metier"
+            )
     
     def _init_opensearch(self):
         """
@@ -289,7 +318,27 @@ class IngestionPipeline:
                                 "keyword": {"type": "keyword"}
                             }
                         },
-                        "metadata": {"type": "object"}
+                        "metadata": {"type": "object"},
+
+                        # Champs metier issus du YAML front matter
+                        # (MarkdownParser) - filtrage term / range
+                        "client": {"type": "keyword"},
+                        "editor": {"type": "keyword"},
+                        "technology": {"type": "keyword"},
+                        "product": {"type": "keyword"},
+                        "version": {"type": "keyword"},
+                        "support_type": {"type": "keyword"},
+                        "severity": {"type": "keyword"},
+                        "ticket_id": {"type": "keyword"},
+                        "date": {
+                            "type": "date",
+                            "format": "yyyy-MM-dd||yyyy-MM-dd'T'HH:mm:ss||strict_date_optional_time"
+                        },
+                        # Champs metier WPD (enquetes publiques / MRAe)
+                        "projet": {"type": "keyword"},
+                        "phase": {"type": "keyword"},
+                        "thematique": {"type": "keyword"},
+                        "departement": {"type": "keyword"}
                     }
                 }
             }
@@ -562,18 +611,27 @@ Recherche: logo charte graphique visuel image {all_keywords}"""
         
         points = []
         for i, chunk in enumerate(embedded_chunks):
+            # Payload de base
+            payload = {
+                "chunk_id": chunk["chunk_id"],
+                "document_id": chunk["document_id"],
+                "text": chunk["text"],                          # Texte brut pour affichage
+                "text_with_context": chunk["text_with_context"], # Texte avec contexte fichier
+                "file_path": chunk["file_path"],                 # Chemin complet du fichier
+                "file_name": chunk["file_name"],                 # Nom du fichier
+                "metadata": chunk["metadata"],
+            }
+            # Champs metier (YAML front matter) remontes au niveau racine
+            # pour permettre le filtrage direct par instance/client/editeur
+            for key in METADATA_FILTERABLE_FIELDS:
+                value = chunk["metadata"].get(key)
+                if value is not None:
+                    payload[key] = value
+
             point = PointStruct(
                 id=hash(chunk["chunk_id"]) % (10**18),  # Convert to positive int
                 vector=chunk["embedding"],
-                payload={
-                    "chunk_id": chunk["chunk_id"],
-                    "document_id": chunk["document_id"],
-                    "text": chunk["text"],                          # Texte brut pour affichage
-                    "text_with_context": chunk["text_with_context"], # Texte avec contexte fichier
-                    "file_path": chunk["file_path"],                 # Chemin complet du fichier
-                    "file_name": chunk["file_name"],                 # Nom du fichier
-                    "metadata": chunk["metadata"]
-                }
+                payload=payload,
             )
             points.append(point)
         
@@ -618,8 +676,14 @@ Recherche: logo charte graphique visuel image {all_keywords}"""
                         "text_with_context": chunk["text_with_context"],
                         "file_path": chunk["file_path"],
                         "file_name": chunk["file_name"],
-                        "metadata": chunk["metadata"]
+                        "metadata": chunk["metadata"],
                     }
+                    # Champs metier (YAML front matter) remontes au niveau
+                    # racine pour permettre le filtrage term/date
+                    for key in METADATA_FILTERABLE_FIELDS:
+                        value = chunk["metadata"].get(key)
+                        if value is not None:
+                            doc[key] = value
                     actions.append(action)
                     actions.append(doc)
                 
