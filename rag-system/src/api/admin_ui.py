@@ -1224,6 +1224,119 @@ async def get_query_history():
         return JSONResponse(content={"queries": []})
 
 
+# ============================================================================
+# Agents (profils, editeur YAML, traces, escalades) - proxy vers l'agent
+# ============================================================================
+
+@app.get("/api/admin/agent/profiles")
+async def admin_list_agent_profiles():
+    """Liste les profils agentiques disponibles, via l'API agent."""
+    agent_url = os.environ.get("AGENT_URL", "http://agent:8000")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{agent_url}/api/agent/profiles")
+            if resp.status_code == 200:
+                return JSONResponse(content=resp.json())
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"profiles": [], "error": str(e)})
+
+
+@app.get("/api/admin/agent/profiles/{profile_name}")
+async def admin_get_agent_profile(profile_name: str):
+    """Retourne le YAML brut d'un profil agentique, via l'API agent."""
+    agent_url = os.environ.get("AGENT_URL", "http://agent:8000")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{agent_url}/api/agent/profiles/{profile_name}")
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+class AdminAgentProfileUpdate(BaseModel):
+    content: str
+
+
+@app.post("/api/admin/agent/profiles/{profile_name}")
+async def admin_save_agent_profile(profile_name: str, req: AdminAgentProfileUpdate):
+    """Enregistre le YAML edite d'un profil agentique, via l'API agent
+    (qui valide la syntaxe et les cles obligatoires avant ecriture)."""
+    agent_url = os.environ.get("AGENT_URL", "http://agent:8000")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{agent_url}/api/agent/profiles/{profile_name}",
+                json={"content": req.content},
+            )
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@app.get("/api/admin/agent/runs")
+async def admin_get_agent_runs(limit: int = 50, profile: str = None):
+    """Historique des executions agentiques (trace, sources, escalade),
+    via l'API agent, pour le visualiseur de trace."""
+    agent_url = os.environ.get("AGENT_URL", "http://agent:8000")
+    params = {"limit": limit}
+    if profile:
+        params["profile"] = profile
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{agent_url}/api/agent/runs", params=params)
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"runs": [], "error": str(e)})
+
+
+@app.get("/api/admin/agent/stats")
+async def admin_get_agent_stats(profile: str = None):
+    """Statistiques agregees (compteur d'escalades, repartition des
+    stopped_reason) via l'API agent."""
+    agent_url = os.environ.get("AGENT_URL", "http://agent:8000")
+    params = {"profile": profile} if profile else {}
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{agent_url}/api/agent/stats", params=params)
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+class AdminAgentRunRequest(BaseModel):
+    query: str
+    profile: str = None
+    index_name: str = None
+
+
+@app.post("/api/admin/agent/run")
+async def admin_run_agent(req: AdminAgentRunRequest):
+    """Lance une execution agentique de test depuis l'onglet Agents
+    (meme route que /api/agent/run cote agent, timeout etendu car le LLM
+    local peut prendre plusieurs dizaines de secondes par etape)."""
+    agent_url = os.environ.get("AGENT_URL", "http://agent:8000")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            resp = await client.post(
+                f"{agent_url}/api/agent/run",
+                json={
+                    "query": req.query,
+                    "profile": req.profile,
+                    "index_name": req.index_name,
+                },
+            )
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
 class RagasEvalRequest(BaseModel):
     question: str
     answer: str
@@ -2637,6 +2750,7 @@ async def admin_ui():
     <div class="top-nav">
         <button class="nav-tab active" onclick="switchTab('ingestion')" id="nav-ingestion">Ingestion</button>
         <button class="nav-tab" onclick="switchTab('ragas')" id="nav-ragas">RAGAS</button>
+        <button class="nav-tab" onclick="switchTab('agents')" id="nav-agents">Agents</button>
     </div>
 
     <!-- Onglet Ingestion (UI existante) -->
@@ -2901,6 +3015,114 @@ async def admin_ui():
             </div>
         </div>
     </div><!-- /tab-ragas -->
+
+    <!-- Onglet Agents -->
+    <div id="tab-agents" class="tab-content">
+        <div class="app-container">
+            <!-- Panneau gauche - Profils et editeur -->
+            <div class="left-panel">
+                <div class="panel-header">
+                    <div class="config-section-title">Profils agentiques</div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Selection du profil</div>
+                    <select id="agent-profile-select" class="input-field" onchange="onAgentProfileChange()">
+                        <option value="">-- Selectionner un profil --</option>
+                    </select>
+                    <div class="profile-description" style="margin-top: 10px;">
+                        <small style="color: var(--text-secondary);">
+                            Profil actif (variable AGENT_PROFILE) marque par (actif).
+                            Editez le YAML ci-dessous puis Enregistrer pour appliquer les changements a chaud.
+                        </small>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Editeur YAML du profil</div>
+                    <textarea id="agent-profile-yaml"
+                              class="input-field"
+                              style="width: 100%; min-height: 320px; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.82rem; white-space: pre; resize: vertical;"
+                              placeholder="Selectionnez un profil pour afficher son YAML"
+                              spellcheck="false"></textarea>
+                    <div class="btn-row" style="margin-top: 10px;">
+                        <button class="btn btn-primary" onclick="saveAgentProfileYaml()" id="btn-agent-save">Enregistrer</button>
+                        <button class="btn" onclick="reloadAgentProfileYaml()">Recharger</button>
+                    </div>
+                    <div class="config-status" id="agent-profile-status"></div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Compteur d'escalades</div>
+                    <div class="ragas-summary-cards" style="grid-template-columns: repeat(2, 1fr);">
+                        <div class="ragas-card">
+                            <div class="ragas-card-value" id="agent-stat-total">--</div>
+                            <div class="ragas-card-label">Executions</div>
+                        </div>
+                        <div class="ragas-card">
+                            <div class="ragas-card-value" id="agent-stat-escalated">--</div>
+                            <div class="ragas-card-label">Escalades</div>
+                        </div>
+                        <div class="ragas-card">
+                            <div class="ragas-card-value" id="agent-stat-rate">--</div>
+                            <div class="ragas-card-label">Taux d'escalade</div>
+                        </div>
+                        <div class="ragas-card">
+                            <div class="ragas-card-value" id="agent-stat-steps">--</div>
+                            <div class="ragas-card-label">Etapes moy.</div>
+                        </div>
+                    </div>
+                    <button class="btn" style="margin-top: 10px;" onclick="loadAgentStats()">Actualiser les stats</button>
+                </div>
+            </div>
+
+            <!-- Panneau droit - Testeur et trace -->
+            <div class="right-panel">
+                <div class="terminal-header">
+                    <div class="terminal-title">
+                        <span>Testeur de requete agentique</span>
+                    </div>
+                </div>
+
+                <div style="padding: 20px; border-bottom: 1px solid var(--border);">
+                    <textarea id="agent-test-query"
+                              class="input-field"
+                              style="width: 100%; min-height: 70px; resize: vertical;"
+                              placeholder="Ex: Comment a ete resolue la derniere panne VPN Fortinet ?"></textarea>
+                    <div class="btn-row" style="margin-top: 10px;">
+                        <button class="btn btn-success" onclick="runAgentTest()" id="btn-agent-run">Lancer</button>
+                        <button class="btn" onclick="loadAgentRuns()">Actualiser l'historique</button>
+                    </div>
+                    <div id="agent-run-status" style="margin-top: 10px; color: var(--text-secondary); font-size: 0.85rem;"></div>
+                </div>
+
+                <div style="padding: 20px;">
+                    <div class="config-section-title">Visualiseur de trace</div>
+                    <div id="agent-trace-viewer" style="margin-bottom: 25px;">
+                        <em style="color: var(--text-secondary);">Lancez une requete ou selectionnez une execution ci-dessous pour voir sa trace.</em>
+                    </div>
+
+                    <div class="config-section-title">Historique des executions</div>
+                    <table class="ragas-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Profil</th>
+                                <th>Question</th>
+                                <th style="width:80px">Etapes</th>
+                                <th style="width:100px">Statut</th>
+                                <th style="width:90px">Escalade</th>
+                            </tr>
+                        </thead>
+                        <tbody id="agent-runs-body">
+                            <tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">Cliquez sur "Actualiser l'historique"</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div><!-- /tab-agents -->
+
     
     <script>
         let ws = null;
@@ -3655,6 +3877,9 @@ async def admin_ui():
             if (tabName === 'ragas') {
                 loadRagasData();
             }
+            if (tabName === 'agents') {
+                initAgentsTab();
+            }
         }
 
         // ============================================================
@@ -4096,6 +4321,225 @@ async def admin_ui():
             } catch (e) {
                 progressDiv.innerHTML = '<strong style="color:var(--error)">Erreur: ' + escapeHtml(e.message) + '</strong>';
             }
+        }
+
+        // ============================================================
+        // Agents tab
+        // ============================================================
+        var agentProfilesCache = [];
+        var agentActiveProfile = null;
+
+        function initAgentsTab() {
+            loadAgentProfiles();
+            loadAgentStats();
+            loadAgentRuns();
+        }
+
+        async function loadAgentProfiles() {
+            var select = document.getElementById('agent-profile-select');
+            try {
+                var res = await fetch('/api/admin/agent/profiles');
+                var data = await res.json();
+                agentProfilesCache = data.profiles || [];
+                agentActiveProfile = data.active || null;
+
+                select.innerHTML = '<option value="">-- Selectionner un profil --</option>';
+                agentProfilesCache.forEach(function(name) {
+                    var opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name + (name === agentActiveProfile ? ' (actif)' : '');
+                    select.appendChild(opt);
+                });
+
+                if (agentActiveProfile && agentProfilesCache.indexOf(agentActiveProfile) !== -1) {
+                    select.value = agentActiveProfile;
+                    onAgentProfileChange();
+                }
+            } catch (e) {
+                select.innerHTML = '<option value="">Erreur de chargement</option>';
+            }
+        }
+
+        async function onAgentProfileChange() {
+            var name = document.getElementById('agent-profile-select').value;
+            var textarea = document.getElementById('agent-profile-yaml');
+            var statusDiv = document.getElementById('agent-profile-status');
+            statusDiv.className = 'config-status';
+            statusDiv.textContent = '';
+            if (!name) {
+                textarea.value = '';
+                return;
+            }
+            textarea.value = 'Chargement...';
+            try {
+                var res = await fetch('/api/admin/agent/profiles/' + encodeURIComponent(name));
+                var data = await res.json();
+                if (res.ok) {
+                    textarea.value = data.content || '';
+                } else {
+                    textarea.value = '';
+                    statusDiv.className = 'config-status error';
+                    statusDiv.textContent = 'Erreur: ' + (data.detail || data.error || res.status);
+                }
+            } catch (e) {
+                textarea.value = '';
+                statusDiv.className = 'config-status error';
+                statusDiv.textContent = 'Erreur: ' + e.message;
+            }
+        }
+
+        function reloadAgentProfileYaml() {
+            if (document.getElementById('agent-profile-select').value) {
+                onAgentProfileChange();
+            }
+        }
+
+        async function saveAgentProfileYaml() {
+            var name = document.getElementById('agent-profile-select').value;
+            var statusDiv = document.getElementById('agent-profile-status');
+            if (!name) {
+                statusDiv.className = 'config-status error';
+                statusDiv.textContent = 'Selectionnez d\\'abord un profil.';
+                return;
+            }
+            var content = document.getElementById('agent-profile-yaml').value;
+            var btn = document.getElementById('btn-agent-save');
+            btn.disabled = true;
+            statusDiv.className = 'config-status';
+            statusDiv.textContent = 'Enregistrement...';
+            try {
+                var res = await fetch('/api/admin/agent/profiles/' + encodeURIComponent(name), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: content })
+                });
+                var data = await res.json();
+                if (res.ok) {
+                    statusDiv.className = 'config-status success';
+                    statusDiv.textContent = 'Profil "' + name + '" enregistre. '
+                        + (name === agentActiveProfile ? 'Rechargement a chaud applique.' : '');
+                } else {
+                    statusDiv.className = 'config-status error';
+                    statusDiv.textContent = 'Erreur: ' + (data.detail || data.error || res.status);
+                }
+            } catch (e) {
+                statusDiv.className = 'config-status error';
+                statusDiv.textContent = 'Erreur: ' + e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function loadAgentStats() {
+            try {
+                var res = await fetch('/api/admin/agent/stats');
+                var data = await res.json();
+                document.getElementById('agent-stat-total').textContent = data.total_runs != null ? data.total_runs : '--';
+                document.getElementById('agent-stat-escalated').textContent = data.escalated_count != null ? data.escalated_count : '--';
+                document.getElementById('agent-stat-rate').textContent = data.escalation_rate != null ? Math.round(data.escalation_rate * 100) + '%' : '--';
+                document.getElementById('agent-stat-steps').textContent = data.avg_steps_used != null ? data.avg_steps_used : '--';
+            } catch (e) {
+                console.error('loadAgentStats error:', e);
+            }
+        }
+
+        function renderAgentTrace(trace) {
+            if (!trace || !trace.length) {
+                return '<em style="color: var(--text-secondary);">Trace vide.</em>';
+            }
+            var html = '';
+            trace.forEach(function(step, i) {
+                var toolName = step.tool || step.action || ('etape ' + (i + 1));
+                html += '<div style="border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 10px;">'
+                    + '<div style="color: var(--accent); font-weight: 600; margin-bottom: 6px;">'
+                    + '#' + (i + 1) + ' &mdash; ' + escapeHtml(String(toolName)) + '</div>'
+                    + '<pre style="white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; color: var(--text-primary); margin: 0;">'
+                    + escapeHtml(JSON.stringify(step, null, 2)) + '</pre></div>';
+            });
+            return html;
+        }
+
+        async function runAgentTest() {
+            var query = document.getElementById('agent-test-query').value.trim();
+            var statusDiv = document.getElementById('agent-run-status');
+            var traceViewer = document.getElementById('agent-trace-viewer');
+            var profile = document.getElementById('agent-profile-select').value || null;
+            if (!query) {
+                statusDiv.textContent = 'Saisissez une question a tester.';
+                return;
+            }
+            var btn = document.getElementById('btn-agent-run');
+            btn.disabled = true;
+            statusDiv.textContent = 'Execution en cours (peut prendre jusqu\\'a une minute)...';
+            traceViewer.innerHTML = '<em style="color: var(--text-secondary);">En attente du resultat...</em>';
+            try {
+                var res = await fetch('/api/admin/agent/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query, profile: profile })
+                });
+                var data = await res.json();
+                if (res.ok) {
+                    statusDiv.innerHTML = 'Termine : <strong>' + escapeHtml(String(data.stopped_reason)) + '</strong>'
+                        + ' &mdash; ' + data.steps_used + ' etape(s)'
+                        + (data.escalated ? ' &mdash; <span style="color: var(--warning);">escalade</span>' : '');
+                    traceViewer.innerHTML = renderAgentTrace(data.trace);
+                    loadAgentStats();
+                    loadAgentRuns();
+                } else {
+                    statusDiv.className = 'config-status error';
+                    statusDiv.textContent = 'Erreur: ' + (data.detail || data.error || res.status);
+                    traceViewer.innerHTML = '';
+                }
+            } catch (e) {
+                statusDiv.textContent = 'Erreur: ' + e.message;
+                traceViewer.innerHTML = '';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        var agentRunsCache = [];
+
+        async function loadAgentRuns() {
+            var tbody = document.getElementById('agent-runs-body');
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">Chargement...</td></tr>';
+            try {
+                var res = await fetch('/api/admin/agent/runs?limit=50');
+                var data = await res.json();
+                agentRunsCache = data.runs || [];
+                if (!agentRunsCache.length) {
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">Aucune execution enregistree</td></tr>';
+                    return;
+                }
+                var html = '';
+                agentRunsCache.forEach(function(run, i) {
+                    var dateStr = run.timestamp ? new Date(run.timestamp).toLocaleString('fr-FR') : '--';
+                    html += '<tr style="cursor:pointer" onclick="showAgentRunTrace(' + i + ')">'
+                        + '<td>' + escapeHtml(dateStr) + '</td>'
+                        + '<td>' + escapeHtml(run.profile_name || '--') + '</td>'
+                        + '<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(run.question || '') + '">' + escapeHtml(run.question || '') + '</td>'
+                        + '<td>' + (run.steps_used != null ? run.steps_used : '--') + '</td>'
+                        + '<td>' + escapeHtml(run.stopped_reason || '--') + '</td>'
+                        + '<td>' + (run.escalated ? '<span style="color:var(--warning)">oui</span>' : 'non') + '</td>'
+                        + '</tr>';
+                });
+                tbody.innerHTML = html;
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--error)">Erreur de chargement</td></tr>';
+            }
+        }
+
+        function showAgentRunTrace(index) {
+            var run = agentRunsCache[index];
+            if (!run) return;
+            var traceViewer = document.getElementById('agent-trace-viewer');
+            var statusDiv = document.getElementById('agent-run-status');
+            statusDiv.innerHTML = 'Execution du ' + (run.timestamp ? new Date(run.timestamp).toLocaleString('fr-FR') : '--')
+                + ' &mdash; <strong>' + escapeHtml(String(run.stopped_reason)) + '</strong>'
+                + ' &mdash; ' + run.steps_used + ' etape(s)'
+                + (run.escalated ? ' &mdash; <span style="color: var(--warning);">escalade</span>' : '');
+            traceViewer.innerHTML = renderAgentTrace(run.trace);
         }
     </script>
 </body>
