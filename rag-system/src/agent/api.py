@@ -56,6 +56,15 @@ class ScopeModel(BaseModel):
     paths: List[str] = Field(default_factory=list, description="Chemins à analyser")
     file_types: List[str] = Field(default_factory=list, description="Types de fichiers")
     date_range: Optional[Dict] = None
+    metadata_filters: Optional[Dict] = Field(
+        default=None,
+        description=(
+            "Filtres sur les champs YAML front matter promus en racine "
+            "(client, editor, technology, product, version, support_type, "
+            "severity, ticket_id, projet, phase, thematique, departement). "
+            "Format: {\"editor\": \"fortinet\"} ou {\"severity\": [\"high\", \"medium\"]}."
+        )
+    )
 
 
 class OptionsModel(BaseModel):

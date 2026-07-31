@@ -94,7 +94,12 @@ class DocumentAnalyzer:
         Args:
             query: Requête utilisateur (utilisée pour le prompt LLM)
             mode: Mode de traitement (auto, files, folder, cross, chat)
-            scope: Filtres optionnels (paths, file_types, date_range)
+            scope: Filtres optionnels (paths, file_types, date_range,
+                metadata_filters). metadata_filters cible les champs YAML
+                front matter promus a la racine des documents/payloads
+                (client, editor, technology, product, version,
+                support_type, severity, ticket_id, projet, phase,
+                thematique, departement), ex: {"editor": "fortinet"}
             options: Options (detail_level, max_items, include_sources)
             history: Historique de conversation optionnel
             search_queries: Liste de requêtes pour la recherche multi-query (optionnel)
@@ -131,7 +136,7 @@ class DocumentAnalyzer:
         elif mode == "cross":
             result = self._analyze_cross(query, scope, detail_level, max_items)
         else:  # chat
-            result = self._analyze_chat(query, detail_level, custom_prompt, history, search_queries)
+            result = self._analyze_chat(query, detail_level, custom_prompt, history, search_queries, scope)
         
         # Enrichir le résultat
         processing_time = int((time.time() - start_time) * 1000)
@@ -146,6 +151,29 @@ class DocumentAnalyzer:
         
         return result
     
+    @staticmethod
+    def _extract_metadata_filters(scope: Dict) -> Optional[Dict]:
+        """
+        Extrait les filtres métier (champs YAML front matter) depuis le
+        scope de la requête, pour les transmettre à HybridSearch.search().
+
+        Args:
+            scope: dict optionnel avec clé "metadata_filters" (ex:
+                {"metadata_filters": {"editor": "fortinet"}}). Les autres
+                clés de scope (paths, file_types, date_range) ne sont pas
+                concernées par cette méthode.
+
+        Returns:
+            Le dict de filtres à passer à HybridSearch.search(filters=...),
+            ou None si absent/vide.
+        """
+        if not scope:
+            return None
+        filters = scope.get("metadata_filters")
+        if not filters:
+            return None
+        return filters
+
     def _analyze_files(
         self,
         query: str,
@@ -157,11 +185,13 @@ class DocumentAnalyzer:
         Mode files: Recherche et résume des fichiers spécifiques
         """
         limits = self.LIMITS[detail_level]
+        metadata_filters = self._extract_metadata_filters(scope)
         
         # Recherche hybride
         search_results = self.hybrid_search.search(
             query,
-            top_k=limits["max_total_chunks"]
+            top_k=limits["max_total_chunks"],
+            filters=metadata_filters
         )
         
         if self.reranker and search_results:
@@ -253,11 +283,13 @@ class DocumentAnalyzer:
         Mode cross: Analyse comparative entre fichiers/dossiers
         """
         limits = self.LIMITS[detail_level]
+        metadata_filters = self._extract_metadata_filters(scope)
         
         # Recherche étendue pour l'analyse croisée
         search_results = self.hybrid_search.search(
             query,
-            top_k=limits["max_total_chunks"] * 2
+            top_k=limits["max_total_chunks"] * 2,
+            filters=metadata_filters
         )
         
         if self.reranker and search_results:
@@ -295,7 +327,7 @@ class DocumentAnalyzer:
             }
         }
     
-    def _analyze_chat(self, query: str, detail_level: str, custom_prompt: str = None, history: list = None, search_queries: list = None) -> Dict:
+    def _analyze_chat(self, query: str, detail_level: str, custom_prompt: str = None, history: list = None, search_queries: list = None, scope: Dict = None) -> Dict:
         """
         Mode chat: Question générale avec contexte RAG
         
@@ -305,20 +337,25 @@ class DocumentAnalyzer:
             custom_prompt: Prompt personnalisé optionnel
             history: Historique de conversation optionnel
             search_queries: Liste de requêtes pour recherche multi-query (optionnel)
+            scope: Filtres optionnels, dont metadata_filters pour cibler
+                les champs YAML front matter (editor, client, severity, ...)
         """
         limits = self.LIMITS[detail_level]
+        metadata_filters = self._extract_metadata_filters(scope)
         
         # Recherche pour contexte (multi-query si disponible)
         if search_queries and len(search_queries) > 1 and hasattr(self.hybrid_search, 'search_multi'):
             logger.info(f"🔄 Multi-query search avec {len(search_queries)} variantes")
             search_results = self.hybrid_search.search_multi(
                 search_queries,
-                top_k=limits["max_total_chunks"]
+                top_k=limits["max_total_chunks"],
+                filters=metadata_filters
             )
         else:
             search_results = self.hybrid_search.search(
                 query,
-                top_k=limits["max_total_chunks"]
+                top_k=limits["max_total_chunks"],
+                filters=metadata_filters
             )
         
         if self.reranker and search_results:
