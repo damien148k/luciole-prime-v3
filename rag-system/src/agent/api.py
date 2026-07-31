@@ -798,9 +798,13 @@ def get_orchestrator(index_name: str = None):
         use_reranker=_use_reranker,
         rerank_candidates=int(_retrieval_cfg.get("fusion_top_k", 30)),
     )
+    # Reutilise le meme QueryRewriter singleton que le pipeline classique
+    # /api/query (voir _get_query_rewriter), pour que l'agent beneficie de
+    # la meme reformulation de requete sans dupliquer son chargement.
     orchestrator = AgentOrchestrator(
         tool_registry=tool_registry,
         llm_generator=analyzer.llm_generator,
+        query_rewriter=_get_query_rewriter(),
     )
     _orchestrators[resolved_index] = {"analyzer": analyzer, "orchestrator": orchestrator}
     return orchestrator

@@ -68,16 +68,23 @@ class AgentOrchestrator:
     prompt système, conditions d'arrêt) et un ToolRegistry partagé.
     """
 
-    def __init__(self, tool_registry: ToolRegistry, llm_generator):
+    def __init__(self, tool_registry: ToolRegistry, llm_generator, query_rewriter=None):
         """
         Args:
             tool_registry: instance de ToolRegistry (tools.py)
             llm_generator: instance de LLMGenerator (generation/llm.py),
                 utilisée uniquement via call_llm() pour la planification
                 (pas generate(), qui est le chemin RAG procédural existant)
+            query_rewriter: instance de QueryRewriter (retrieval/query_rewriter.py),
+                optionnelle. Si fournie, appliquée une seule fois en debut de
+                run() (pas a chaque etape de la boucle) pour aligner l'agent
+                sur le meme comportement de reformulation que le pipeline
+                classique /api/query. Si None, l'agent recoit la question
+                telle quelle (comportement pre-correctif).
         """
         self.tools = tool_registry
         self.llm = llm_generator
+        self.query_rewriter = query_rewriter
 
     def run(
         self,
@@ -132,9 +139,31 @@ class AgentOrchestrator:
         observations: List[str] = []
         rejected_final_answers: List[str] = []
 
+        original_query = query
+        rewritten_queries, query_type, was_rewritten = self._apply_query_rewriting(query)
+        # Portes par self pendant la duree de cet appel run() pour que
+        # _finalize()/_error_result() puissent les exposer sans modifier
+        # chacun de leurs points de retour un par un (meme pattern que
+        # self.tools.get_escalations() deja lu depuis _finalize).
+        self._last_query_type = query_type
+        self._last_was_rewritten = was_rewritten
+        if was_rewritten:
+            trace.append({
+                "step": 0,
+                "tool": "query_rewriting",
+                "args": {"query": original_query},
+                "result": {
+                    "rewritten_queries": rewritten_queries,
+                    "query_type": query_type,
+                },
+                "duration_ms": 0,
+                "note": "etape_pre_boucle",
+            })
+
         for step in range(1, max_steps + 1):
             plan_prompt = self._build_plan_prompt(
-                query=query,
+                query=original_query,
+                rewritten_queries=rewritten_queries if was_rewritten else None,
                 tools_description=available,
                 observations=observations,
                 history=history,
@@ -321,6 +350,35 @@ class AgentOrchestrator:
     # CONSTRUCTION DU PROMPT DE PLANIFICATION
     # =========================================================================
 
+    def _apply_query_rewriting(self, query: str):
+        """
+        Applique la reformulation de requete une seule fois, avant le
+        premier tour de planification. Ne modifie jamais la query envoyee
+        au LLM planificateur comme "question de l'utilisateur" (on garde
+        toujours l'original pour la fidelite/tracabilite) : les variantes
+        reformulees sont ajoutees en complement dans le prompt pour guider
+        les appels a search_documents / search_multi.
+
+        Returns:
+            (rewritten_queries: List[str], query_type: str, was_rewritten: bool)
+            was_rewritten est False si aucun rewriter n'est configure, si la
+            requete est vide, ou si le rewriter n'a rien modifie.
+        """
+        if self.query_rewriter is None:
+            return [query], "general", False
+
+        try:
+            rewritten_queries, query_type, was_rewritten = self.query_rewriter.rewrite(query)
+        except Exception as e:
+            # Coherent avec la doctrine "pas de mode degrade silencieux" :
+            # on log l'echec mais on ne casse jamais la boucle agentique
+            # pour un probleme de reformulation, qui est une optimisation,
+            # pas une dependance critique comme le reranker.
+            logger.warning(f"Echec du query rewriting, question originale conservee: {e}")
+            return [query], "general", False
+
+        return rewritten_queries, query_type, was_rewritten
+
     def _build_plan_prompt(
         self,
         query: str,
@@ -329,6 +387,7 @@ class AgentOrchestrator:
         history: Optional[List[Dict]],
         step: int,
         max_steps: int,
+        rewritten_queries: Optional[List[str]] = None,
     ) -> str:
         tools_block = "\n".join(
             f"- {name}: {spec['description']}\n  Arguments: {spec['args_schema']}"
@@ -349,9 +408,22 @@ class AgentOrchestrator:
                 f"{i+1}. {obs}" for i, obs in enumerate(observations)
             ) + "\n\n"
 
+        rewritten_block = ""
+        if rewritten_queries and len(rewritten_queries) > 1:
+            variants = "\n".join(f"- {q}" for q in rewritten_queries)
+            rewritten_block = (
+                "Reformulations suggérées (mêmes outils, essaie ces variantes "
+                "avec search_multi si une seule recherche ne suffit pas):\n"
+                f"{variants}\n\n"
+            )
+        elif rewritten_queries and rewritten_queries[0] != query:
+            rewritten_block = (
+                f"Reformulation suggérée pour la recherche: {rewritten_queries[0]}\n\n"
+            )
+
         return f"""{history_block}Question de l'utilisateur: {query}
 
-Outils disponibles:
+{rewritten_block}Outils disponibles:
 {tools_block}
 
 {observations_block}Étape {step}/{max_steps}.
@@ -547,6 +619,8 @@ Aucun texte avant ou après le JSON."""
             "trace": trace,
             "steps_used": steps_used,
             "stopped_reason": stopped_reason,
+            "query_rewritten": getattr(self, "_last_was_rewritten", False),
+            "query_type": getattr(self, "_last_query_type", "general"),
         }
 
     def _error_result(self, trace: List[Dict], message: str, steps_used: int) -> Dict:
@@ -559,4 +633,6 @@ Aucun texte avant ou après le JSON."""
             "trace": trace,
             "steps_used": steps_used,
             "stopped_reason": "error",
+            "query_rewritten": getattr(self, "_last_was_rewritten", False),
+            "query_type": getattr(self, "_last_query_type", "general"),
         }
