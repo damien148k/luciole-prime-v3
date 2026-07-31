@@ -5,6 +5,7 @@ Version améliorée avec ExcelParser pour préserver la structure tabulaire
 """
 
 import os
+import re
 import signal
 import threading
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Dict, List, Optional
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from loguru import logger
+import yaml
 
 # Document parsing libraries
 import pymupdf
@@ -1013,11 +1015,107 @@ class ImageParser(BaseParser):
             raise
 
 
+class MarkdownParser(BaseParser):
+    """
+    Parser Markdown avec extraction du YAML front matter en métadonnées.
+
+    Le front matter est retiré du `content` (pour ne plus polluer l'embedding
+    ni BM25) et devient des champs de premier niveau dans `metadata`, prêts
+    à être propagés dans les payloads Qdrant et OpenSearch.
+
+    Champs métier automatiquement remontés (Belacom, WPD, extensibles) :
+      - client, editor, technology, product, version, support_type,
+        severity, ticket_id, date
+      - projet, phase, thematique, departement
+    """
+
+    # Front matter YAML délimité par --- en début de fichier
+    _FRONT_MATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+
+    # Champs métier remontés au niveau racine de metadata
+    _PROMOTED_KEYS = (
+        "client", "editor", "technology", "product", "version",
+        "support_type", "severity", "ticket_id", "date",
+        "projet", "phase", "thematique", "departement",
+    )
+
+    def supported_extensions(self) -> List[str]:
+        return [".md", ".markdown"]
+
+    @staticmethod
+    def _normalize_yaml_value(value):
+        """Convertit les types YAML non JSON-serialisables (date, datetime, etc.) en str."""
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    def parse(self, file_path: str) -> Dict:
+        logger.info(f"Parsing Markdown: {file_path}")
+        try:
+            content = None
+            for encoding in ["utf-8", "latin-1", "cp1252", "iso-8859-1"]:
+                try:
+                    with open(file_path, "r", encoding=encoding) as f:
+                        content = f.read()
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if content is None:
+                with open(file_path, "rb") as f:
+                    content = f.read().decode("utf-8", errors="ignore")
+
+            front_matter: Dict = {}
+            body = content
+            m = self._FRONT_MATTER_RE.match(content)
+            if m:
+                try:
+                    fm = yaml.safe_load(m.group(1)) or {}
+                    if isinstance(fm, dict):
+                        front_matter = {
+                            str(k): self._normalize_yaml_value(v)
+                            for k, v in fm.items()
+                        }
+                        body = content[m.end():]
+                        logger.info(
+                            f"Front matter détecté ({len(front_matter)} clés) : "
+                            f"{list(front_matter.keys())}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Front matter non-dict dans {file_path}, ignoré"
+                        )
+                except yaml.YAMLError as e:
+                    logger.warning(
+                        f"YAML front matter invalide dans {file_path}: {e}"
+                    )
+
+            metadata = {
+                "type": "markdown",
+                "file_name": Path(file_path).name,
+                "file_path": file_path,
+                "char_count": len(body),
+                "line_count": body.count("\n") + 1,
+                "has_front_matter": bool(front_matter),
+                "front_matter": front_matter,  # dict complet préservé pour affichage
+            }
+
+            # Champs métier remontés au niveau racine de metadata
+            # → propagés ensuite au niveau racine du payload par pipeline.py
+            for key in self._PROMOTED_KEYS:
+                if key in front_matter and front_matter[key] is not None:
+                    metadata[key] = front_matter[key]  # deja normalise par _normalize_yaml_value
+
+            return {"content": body, "metadata": metadata}
+        except Exception as e:
+            logger.error(f"Error parsing Markdown {file_path}: {e}")
+            raise
+
+
 class TXTParser(BaseParser):
     """Parser for plain text files"""
     
     def supported_extensions(self) -> List[str]:
-        return [".txt", ".md", ".rst", ".csv", ".log", ".ini", ".cfg", ".json", ".yaml", ".yml"]
+        return [".txt", ".rst", ".csv", ".log", ".ini", ".cfg", ".json", ".yaml", ".yml"]
     
     def parse(self, file_path: str) -> Dict:
         logger.info(f"Parsing TXT: {file_path}")
@@ -1305,6 +1403,7 @@ class DocumentParser:
             XLSXParser(),
             MSGParser(),
             EMLParser(),
+            MarkdownParser(),  # Markdown avec extraction YAML front matter (avant TXTParser)
             TXTParser(),
             ImageParser(),  # Images avec OCR
             RTFParser(),    # Rich Text Format
