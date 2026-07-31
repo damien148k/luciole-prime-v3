@@ -1053,7 +1053,7 @@ class MarkdownParser(BaseParser):
         logger.info(f"Parsing Markdown: {file_path}")
         try:
             content = None
-            for encoding in ["utf-8", "latin-1", "cp1252", "iso-8859-1"]:
+            for encoding in ["utf-8-sig", "latin-1", "cp1252", "iso-8859-1"]:
                 try:
                     with open(file_path, "r", encoding=encoding) as f:
                         content = f.read()
@@ -1062,7 +1062,13 @@ class MarkdownParser(BaseParser):
                     continue
             if content is None:
                 with open(file_path, "rb") as f:
-                    content = f.read().decode("utf-8", errors="ignore")
+                    content = f.read().decode("utf-8-sig", errors="ignore")
+
+            # Filet de securite : retire un BOM UTF-8 residuel si jamais
+            # l'encodage detecte ne l'a pas deja fait (ex: contenu deja
+            # decode ailleurs, ou latin-1 qui ne reconnait pas le BOM UTF-8)
+            if content.startswith("\ufeff"):
+                content = content.lstrip("\ufeff")
 
             front_matter: Dict = {}
             body = content
