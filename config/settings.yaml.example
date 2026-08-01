@@ -10,6 +10,13 @@ retrieval:
   bm25_weight: 0.45
   dense_weight: 0.55
   rerank_top_n: 15
+  # Reranking des recherches de la boucle agentique (/api/agent/run).
+  # true par defaut : l'agent beneficie du meme cross-encoder que le chat
+  # classique. Passer a false uniquement pour une mesure A/B (recall@k avec
+  # et sans reranking sur le meme index). La variable d'environnement
+  # AGENT_USE_RERANKER=true|false a priorite sur cette valeur.
+  # Le vivier soumis au reranker reprend fusion_top_k ci-dessus.
+  agent_use_reranker: true
 
 reranker:
   model: BAAI/bge-reranker-v2-m3

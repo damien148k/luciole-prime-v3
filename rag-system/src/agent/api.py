@@ -229,20 +229,68 @@ def _get_embedder():
     return _embedder
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    """Lit un booleen depuis l'environnement, avec repli sur la config.
+
+    La variable d'environnement, quand elle est posee, l'emporte sur la
+    valeur issue de settings.yaml : cela permet de basculer un reglage
+    pour une campagne de mesure (docker compose run -e ...) sans editer
+    la configuration de l'instance. Valeurs acceptees, insensibles a la
+    casse : true/1/yes/on et false/0/no/off.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in ("true", "1", "yes", "on"):
+        return True
+    if value in ("false", "0", "no", "off"):
+        return False
+    logger.warning(
+        f"{name}='{raw}' non reconnu (attendu true/false), "
+        f"valeur par defaut conservee: {default}"
+    )
+    return default
+
+
 def _get_reranker():
-    """Charge le reranker une seule fois"""
+    """Charge le reranker une seule fois.
+
+    Comportement strict par defaut : si le modele ne charge pas,
+    l'exception remonte et fait echouer toute route qui en depend
+    (chat classique ET agent), au lieu de degrader silencieusement
+    vers une recherche non reranked. C'est voulu : un mode degrade
+    invisible fausserait toute evaluation de qualite (impossible de
+    distinguer un probleme de prompt/pipeline d'une simple absence de
+    reranking).
+
+    Echappatoire explicite : positionner RERANKER_OPTIONAL=true dans
+    l'environnement pour retrouver l'ancien comportement (log un
+    warning, renvoie None, l'appelant tourne sans reranker). A
+    n'utiliser qu'en connaissance de cause (ex: environnement de repli
+    sans GPU dispo), jamais silencieusement en test de qualite.
+    """
     global _reranker
     if _reranker is None:
         config = _get_config()
         from src.retrieval.reranker import Reranker
+        optional = os.environ.get("RERANKER_OPTIONAL", "false").lower() == "true"
         try:
             _reranker = Reranker(
                 model_name=config["reranker"]["model"],
                 device=config["reranker"]["device"],
                 top_n=config["retrieval"].get("rerank_top_n", 10)
             )
+            logger.info("Reranker charge et actif")
         except Exception as e:
-            logger.warning(f"Reranker not available: {e}")
+            if optional:
+                logger.warning(f"Reranker not available (mode degrade autorise via RERANKER_OPTIONAL=true): {e}")
+            else:
+                logger.error(f"Reranker indisponible et RERANKER_OPTIONAL n'est pas active: {e}")
+                raise RuntimeError(
+                    f"Reranker indisponible ({e}). Pour tester/tourner sans reranker "
+                    "(mode degrade explicite), positionner RERANKER_OPTIONAL=true."
+                ) from e
     return _reranker
 
 
@@ -712,8 +760,10 @@ async def analyze(request: AnalyzeRequest):
 def get_orchestrator(index_name: str = None):
     """
     Retourne un AgentOrchestrator pret a l'emploi pour l'index donne, en
-    reutilisant le meme HybridSearch/LLMGenerator que le DocumentAnalyzer
-    (via get_analyzer, deja mis en cache avec son propre TTL).
+    reutilisant le meme HybridSearch/LLMGenerator/Reranker que le
+    DocumentAnalyzer (via get_analyzer, deja mis en cache avec son propre
+    TTL). Le reranker est ainsi applique de la meme facon cote agent que
+    cote pipeline /api/query.
 
     L'orchestrateur est reconstruit si l'analyzer sous-jacent a ete
     reconstruit entre-temps (expiration du TTL ou reload-config), pour ne
@@ -730,9 +780,23 @@ def get_orchestrator(index_name: str = None):
     from src.agent.tools import ToolRegistry
     from src.agent.orchestrator import AgentOrchestrator
 
+    # Reranking de l'agent : actif par defaut, desactivable pour une mesure
+    # A/B (recall@k avec et sans reranking sur le meme index). La variable
+    # d'environnement AGENT_USE_RERANKER a priorite sur settings.yaml pour
+    # permettre de lancer une campagne de mesure sans editer la config de
+    # l'instance. Le vivier soumis au cross-encoder reprend fusion_top_k
+    # (meme valeur que le pipeline /api/query via DocumentAnalyzer).
+    _retrieval_cfg = _get_config().get("retrieval", {}) or {}
+    _use_reranker = _env_flag(
+        "AGENT_USE_RERANKER",
+        default=bool(_retrieval_cfg.get("agent_use_reranker", True)),
+    )
     tool_registry = ToolRegistry(
         hybrid_search=analyzer.hybrid_search,
         llm_generator=analyzer.llm_generator,
+        reranker=analyzer.reranker,
+        use_reranker=_use_reranker,
+        rerank_candidates=int(_retrieval_cfg.get("fusion_top_k", 30)),
     )
     orchestrator = AgentOrchestrator(
         tool_registry=tool_registry,
