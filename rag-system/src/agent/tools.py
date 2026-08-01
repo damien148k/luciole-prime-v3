@@ -365,6 +365,13 @@ class ToolRegistry:
         return {"no_answer": True, "reason": reason.strip()}
 
     def get_no_answers(self) -> List[Dict]:
+        """
+        Lacunes du corpus cumulees depuis la creation du registre.
+
+        Meme portee processus que get_escalations : utile pour un comptage
+        grossier en memoire, pas pour attribuer une lacune a une requete
+        donnee. Un comptage durable devra passer par les logs ou la trace.
+        """
         return list(self._no_answers)
 
     def final_answer(self, text: str, sources: Optional[List[str]] = None) -> Dict:
@@ -410,5 +417,12 @@ class ToolRegistry:
         return summarized
 
     def get_escalations(self) -> List[Dict]:
-        """Retourne les escalades déclenchées pendant cette exécution."""
+        """
+        Escalades cumulees depuis la creation du registre.
+
+        ATTENTION : la portee est le processus, pas la requete. L'API met le
+        registre en cache par index, cette liste couvre donc toutes les
+        requetes servies depuis le demarrage. Pour savoir si UNE execution a
+        escalade, lire sa trace, pas cette liste.
+        """
         return list(self._escalations)

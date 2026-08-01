@@ -505,6 +505,30 @@ Aucun texte avant ou après le JSON."""
     # CONSTRUCTION DU RÉSULTAT
     # =========================================================================
 
+    @staticmethod
+    def _escalations_in_trace(trace: List[Dict]) -> List[Dict]:
+        """
+        Escalades effectivement enregistrees pendant CETTE execution.
+
+        Le ToolRegistry est mis en cache par index dans l'API : ses listes
+        internes accumulent les appels de toutes les requetes servies par le
+        processus. Les interroger ici marquait escalated=True sur toutes les
+        reponses suivant la premiere escalade, y compris les reponses saines.
+        La trace, elle, est locale au run et sure vis-a-vis des requetes
+        concurrentes qui partagent le meme registre.
+
+        Une escalade refusee par le profil ou mise en echec ne compte pas :
+        rien n'a ete enregistre, le drapeau doit rester faux.
+        """
+        found = []
+        for entry in trace:
+            if entry.get("tool") != "escalate_to_human":
+                continue
+            result = entry.get("result")
+            if isinstance(result, dict) and result.get("escalated"):
+                found.append(result)
+        return found
+
     def _finalize(
         self,
         trace: List[Dict],
@@ -513,7 +537,7 @@ Aucun texte avant ou après le JSON."""
         steps_used: int,
         stopped_reason: str,
     ) -> Dict:
-        escalations = self.tools.get_escalations()
+        escalations = self._escalations_in_trace(trace)
         return {
             "result_type": "agentic",
             "response": response_text,
