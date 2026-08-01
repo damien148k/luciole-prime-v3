@@ -26,6 +26,22 @@ from .tools import ToolRegistry, ToolError
 
 DEFAULT_MAX_STEPS = 5
 
+# Budget d'injection du contenu retrouve dans les observations transmises au
+# planificateur. Sans extraits, le LLM ne voit que des noms de fichiers : il
+# redige alors sa reponse sans avoir jamais lu les documents, et fabrique le
+# contenu qu'il attribue a des sources pourtant reellement remontees.
+OBSERVATION_MAX_RESULTS = 5
+OBSERVATION_EXCERPT_CHARS = 400
+OBSERVATION_METADATA_MAX = 6
+# Les observations etant desormais riches, le repli de fin de boucle doit etre
+# borne : il est affiche tel quel a l'utilisateur.
+FALLBACK_OBSERVATION_CHARS = 800
+OBSERVATION_METADATA_PRIORITY = (
+    "ticket_id", "product", "version", "technology", "support_type",
+    "severity", "projet", "phase", "thematique", "departement",
+    "editor", "client",
+)
+
 
 class AgentOrchestrator:
     """
@@ -230,7 +246,8 @@ class AgentOrchestrator:
             fallback_text = (
                 "Je n'ai pas pu formuler une réponse complète dans le nombre "
                 "d'étapes disponibles. Voici ce que j'ai trouvé jusqu'ici : "
-                + " ".join(observations[-2:])
+                + self._truncate(" ".join(observations[-2:]),
+                                 FALLBACK_OBSERVATION_CHARS)
             )
         else:
             fallback_text = "Je n'ai pas trouvé suffisamment d'informations pour répondre."
@@ -319,15 +336,78 @@ Aucun texte avant ou après le JSON."""
     # =========================================================================
 
     @staticmethod
+    def _format_metadata(metadata: Optional[Dict]) -> str:
+        """Rend les métadonnées les plus discriminantes d'un chunk.
+
+        L'ordre suit OBSERVATION_METADATA_PRIORITY pour que les champs qui
+        distinguent réellement deux documents (ticket_id, product, version)
+        passent avant ceux qui sont constants sur une instance (client).
+        """
+        if not metadata:
+            return ""
+        known = [
+            k for k in OBSERVATION_METADATA_PRIORITY
+            if metadata.get(k) not in (None, "")
+        ]
+        extra = sorted(
+            k for k in metadata
+            if k not in OBSERVATION_METADATA_PRIORITY
+            and metadata.get(k) not in (None, "")
+        )
+        keys = (known + extra)[:OBSERVATION_METADATA_MAX]
+        return " | ".join(f"{k}={metadata[k]}" for k in keys)
+
+    @staticmethod
+    def _truncate(text: Any, limit: int) -> str:
+        """Tronque un texte a `limit` caracteres, avec ellipse si coupe."""
+        text = str(text or "")
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "..."
+
+    @staticmethod
+    def _format_excerpt(result: Dict) -> str:
+        """Extrait compact, sur une seule ligne, du contenu d'un chunk."""
+        raw = (
+            result.get("excerpt")
+            or result.get("text")
+            or result.get("content")
+            or ""
+        )
+        collapsed = re.sub(r"\s+", " ", str(raw)).strip()
+        return AgentOrchestrator._truncate(collapsed, OBSERVATION_EXCERPT_CHARS)
+
+    @staticmethod
     def _format_observation(tool_name: str, tool_result: Any) -> str:
-        """Résume le résultat d'un tool en texte compact pour le prompt
-        de l'étape suivante (évite de ré-injecter des payloads complets)."""
+        """Résume le résultat d'un tool pour le prompt de l'étape suivante.
+
+        Les extraits sont réinjectés : le planificateur doit pouvoir lire le
+        contenu retrouvé, faute de quoi il ne dispose que de noms de fichiers
+        et invente ce qu'ils contiennent. Le volume reste borné par
+        OBSERVATION_MAX_RESULTS et OBSERVATION_EXCERPT_CHARS.
+        """
         if isinstance(tool_result, dict) and "count" in tool_result:
             count = tool_result["count"]
             if count == 0:
-                return f"{tool_name}: aucun résultat trouvé."
-            files = [r.get("file_name", "?") for r in tool_result.get("results", [])[:5]]
-            return f"{tool_name}: {count} résultat(s) trouvé(s) dans {', '.join(files)}."
+                note = tool_result.get("note")
+                base = f"{tool_name}: aucun résultat trouvé."
+                return f"{base} {note}" if note else base
+
+            results = tool_result.get("results") or []
+            shown = results[:OBSERVATION_MAX_RESULTS]
+            lines = []
+            for r in shown:
+                header = r.get("file_name") or r.get("file_path") or "?"
+                meta = AgentOrchestrator._format_metadata(r.get("metadata"))
+                if meta:
+                    header = f"{header} [{meta}]"
+                excerpt = AgentOrchestrator._format_excerpt(r)
+                lines.append(f"- {header}\n  {excerpt}" if excerpt else f"- {header}")
+
+            hidden = count - len(shown)
+            suffix = f", {hidden} non affiché(s)" if hidden > 0 else ""
+            body = "\n".join(lines)
+            return f"{tool_name}: {count} résultat(s){suffix}.\n{body}"
         if isinstance(tool_result, dict) and "escalated" in tool_result:
             return f"escalate_to_human: escalade enregistrée ({tool_result.get('reason')})."
         return f"{tool_name}: {str(tool_result)[:300]}"
