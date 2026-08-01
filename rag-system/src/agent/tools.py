@@ -81,6 +81,7 @@ class ToolRegistry:
         self.use_reranker = use_reranker
         self.rerank_candidates = max(1, int(rerank_candidates))
         self._escalations: List[Dict] = []
+        self._no_answers: List[Dict] = []
 
         if reranker is not None and not use_reranker:
             logger.warning(
@@ -141,6 +142,19 @@ class ToolRegistry:
                 ),
                 "args_schema": {
                     "reason": "str (obligatoire) - motif de l'escalade",
+                },
+            },
+            "no_answer": {
+                "fn": self.no_answer,
+                "description": (
+                    "Termine la boucle en declarant que le corpus ne permet "
+                    "pas de repondre. A appeler des que les extraits observes "
+                    "ne traitent pas du sujet de la question, plutot que de "
+                    "repondre de memoire ou de citer un document hors sujet. "
+                    "N'exige aucune source."
+                ),
+                "args_schema": {
+                    "reason": "str (obligatoire) - ce qui manque dans le corpus",
                 },
             },
             "final_answer": {
@@ -334,6 +348,24 @@ class ToolRegistry:
         self._escalations.append(entry)
         logger.warning(f"🚨 Escalade humaine demandée par l'agent: {reason}")
         return {"escalated": True, "reason": reason.strip()}
+
+    def no_answer(self, reason: str) -> Dict:
+        """Declare que le corpus ne permet pas de repondre.
+
+        Sortie honnete distincte de l'escalade : elle constate une lacune
+        documentaire sans reclamer d'intervention humaine. Les appels sont
+        conserves pour permettre de compter les lacunes du corpus.
+        """
+        if not reason or not reason.strip():
+            raise ToolError("no_answer: 'reason' ne peut pas être vide")
+
+        entry = {"reason": reason.strip()}
+        self._no_answers.append(entry)
+        logger.info(f"Aucune reponse dans le corpus: {reason.strip()}")
+        return {"no_answer": True, "reason": reason.strip()}
+
+    def get_no_answers(self) -> List[Dict]:
+        return list(self._no_answers)
 
     def final_answer(self, text: str, sources: Optional[List[str]] = None) -> Dict:
         if not text or not text.strip():
