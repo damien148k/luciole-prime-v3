@@ -26,6 +26,24 @@ from .tools import ToolRegistry, ToolError
 
 DEFAULT_MAX_STEPS = 5
 
+# Sorties terminales de la boucle, toujours proposees au LLM meme si le
+# profil client ne les declare pas : sans elles il n'a aucun moyen propre
+# de conclure et epuise max_steps.
+TERMINAL_TOOLS_ALWAYS_AVAILABLE = ("final_answer", "no_answer")
+
+# Message rendu a l'utilisateur quand le corpus ne permet pas de repondre.
+# Texte fixe et non negociable : le motif redige par le LLM part dans la
+# trace, pas dans la reponse, pour qu'aucun contenu non sourcé ne remonte.
+NO_ANSWER_MESSAGE = (
+    "Le corpus documentaire ne contient pas d'information permettant de "
+    "répondre à cette question."
+)
+
+ESCALATION_MESSAGE = (
+    "Cette demande nécessite une validation humaine, une escalade a été "
+    "enregistrée."
+)
+
 
 class AgentOrchestrator:
     """
@@ -82,11 +100,17 @@ class AgentOrchestrator:
         stop_conditions = profile.get("stop_conditions", {}) or {}
 
         available = self.tools.available_tools(allowed=tools_allowed)
-        if "final_answer" not in available:
-            # Sans final_answer le LLM n'a aucun moyen propre de terminer
-            # la boucle : on le rend toujours disponible par sécurité.
-            available = dict(available, **self.tools.available_tools(allowed=["final_answer"]))
-            tools_allowed = list(tools_allowed) + ["final_answer"]
+        for exit_tool in TERMINAL_TOOLS_ALWAYS_AVAILABLE:
+            if exit_tool not in available:
+                # Sans ces sorties le LLM n'a aucun moyen propre de terminer
+                # la boucle : on les rend toujours disponibles par securite.
+                # no_answer en fait partie car les profils clients existants,
+                # definis hors depot, ne le declarent pas encore.
+                available = dict(
+                    available,
+                    **self.tools.available_tools(allowed=[exit_tool]),
+                )
+                tools_allowed = list(tools_allowed) + [exit_tool]
 
         trace: List[Dict] = []
         observations: List[str] = []
@@ -195,7 +219,9 @@ class AgentOrchestrator:
                         "(sources insuffisantes ou citation manquante). Ne "
                         "répète pas ce texte tel quel : lance search_documents "
                         "avec une requête reformulée, essaie search_multi, ou "
-                        "escalade si tu ne trouves vraiment aucune source."
+                        "appelle no_answer si le corpus ne contient vraiment "
+                        "pas la réponse. N'invente pas de source pour "
+                        "satisfaire la condition."
                     )
                     continue
 
@@ -203,6 +229,44 @@ class AgentOrchestrator:
                     trace, result.get("text", ""), result.get("sources", []),
                     step, "final_answer"
                 )
+
+            if tool_name in ("no_answer", "escalate_to_human"):
+                # Sorties terminales au meme titre que final_answer. Traitees
+                # auparavant comme des tools intermediaires, elles laissaient
+                # la boucle continuer : le LLM escaladait, recevait son propre
+                # accuse de reception en observation, et re-escaladait jusqu'a
+                # epuiser max_steps.
+                try:
+                    result = self.tools.call(tool_name, tool_args, allowed=tools_allowed)
+                    error = None
+                except ToolError as e:
+                    # Tool refuse par le profil ou argument manquant : on
+                    # rend la main au LLM au lieu de terminer sur un echec.
+                    trace.append({
+                        "step": step,
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "result": None,
+                        "error": str(e),
+                        "duration_ms": duration_ms,
+                    })
+                    observations.append(f"Erreur lors de l'appel à {tool_name}: {e}")
+                    continue
+
+                trace.append({
+                    "step": step,
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "result": result,
+                    "error": error,
+                    "duration_ms": duration_ms,
+                })
+                message = (
+                    NO_ANSWER_MESSAGE if tool_name == "no_answer"
+                    else ESCALATION_MESSAGE
+                )
+                reason = "no_answer" if tool_name == "no_answer" else "escalated"
+                return self._finalize(trace, message, [], step, reason)
 
             # Tool intermédiaire (search_documents, get_document, etc.)
             try:
@@ -277,6 +341,15 @@ Outils disponibles:
 
 Choisis UN SEUL outil à appeler maintenant, en fonction de ce que tu sais déjà.
 Si tu as assez d'informations pour répondre, appelle final_answer.
+
+Règles impératives:
+- N'utilise jamais tes connaissances générales. Chaque affirmation de ta
+  réponse finale doit provenir des extraits observés ci-dessus.
+- Si les extraits ne traitent pas du sujet de la question, appelle no_answer.
+  Ne cite jamais un document qui ne contient pas la réponse : une citation
+  exacte accolée à un contenu inventé est la pire sortie possible.
+- Ne relance pas une recherche déjà effectuée à l'identique. Si une
+  reformulation n'a rien donné non plus, conclus avec no_answer.
 
 Réponds UNIQUEMENT avec un objet JSON de la forme:
 {{"tool": "nom_de_l_outil", "args": {{...}}}}
