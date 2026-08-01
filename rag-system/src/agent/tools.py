@@ -37,7 +37,14 @@ class ToolRegistry:
     disponible à tout profil qui l'autorise explicitement.
     """
 
-    def __init__(self, hybrid_search, llm_generator=None, reranker=None):
+    def __init__(
+        self,
+        hybrid_search,
+        llm_generator=None,
+        reranker=None,
+        use_reranker: bool = True,
+        rerank_candidates: int = 30,
+    ):
         """
         Args:
             hybrid_search: instance de HybridSearch (retrieval/hybrid.py),
@@ -52,11 +59,34 @@ class ToolRegistry:
                 reranke deja systematiquement (voir DocumentAnalyzer). Si
                 None ou en cas d'erreur, on retombe silencieusement sur
                 l'ordre RRF brut (jamais d'exception fatale ici).
+            use_reranker: interrupteur explicite du reranking (defaut True).
+                A la difference de reranker=None (le modele n'est pas
+                disponible), ce flag exprime une decision : desactiver le
+                reranking alors que le modele est charge. Sert aux mesures
+                A/B contre un jeu d'evaluation (recall@k avec et sans
+                reranking sur exactement le meme index et le meme corpus).
+            rerank_candidates: taille du vivier soumis au reranker (defaut
+                30). Un reranker n'a d'interet que s'il peut repecher des
+                documents mal classes par la fusion RRF : on demande donc
+                `rerank_candidates` resultats a la recherche hybride, puis
+                le cross-encoder n'en retient que `top_k`. Sans cela, on
+                rerankerait top_k vers top_k, soit une simple permutation
+                des documents deja selectionnes. Aligne l'agent sur le
+                pipeline /api/query (DocumentAnalyzer : fusion_top_k=30
+                candidats -> rerank_top_n=15 retenus).
         """
         self.hybrid_search = hybrid_search
         self.llm_generator = llm_generator
         self.reranker = reranker
+        self.use_reranker = use_reranker
+        self.rerank_candidates = max(1, int(rerank_candidates))
         self._escalations: List[Dict] = []
+
+        if reranker is not None and not use_reranker:
+            logger.warning(
+                "ToolRegistry: reranker charge mais desactive via use_reranker=False "
+                "(les recherches de l'agent renverront l'ordre RRF brut)"
+            )
 
         # Table nom -> (fonction, description, schéma d'arguments)
         # La description et le schéma sont injectés tels quels dans le
@@ -204,13 +234,33 @@ class ToolRegistry:
         - un echec transitoire de l'appel rerank() lui-meme
         Dans les deux cas l'anomalie doit rester visible, pas masquee.
         """
-        if not self.reranker or not results:
-            return results, False
+        if not self._reranking_enabled() or not results:
+            # Troncature explicite : quand le reranking n'a pas lieu, le
+            # vivier elargi demande a la recherche hybride (voir
+            # _candidate_top_k) ne doit pas fuir vers l'appelant, qui
+            # attend au plus top_k resultats.
+            return results[:top_k], False
         try:
             return self.reranker.rerank(query, results)[:top_k], True
         except Exception as e:
             logger.warning(f"Reranking agent echoue, resultats RRF conserves: {e}")
-            return results, False
+            return results[:top_k], False
+
+    def _reranking_enabled(self) -> bool:
+        """Le reranking est actif : modele charge ET non desactive."""
+        return bool(self.reranker) and bool(self.use_reranker)
+
+    def _candidate_top_k(self, top_k: int) -> int:
+        """Nombre de resultats a demander a la recherche hybride.
+
+        Avec reranking actif, on elargit le vivier a `rerank_candidates`
+        pour que le cross-encoder puisse repecher des documents mal
+        classes par RRF. Sans reranking, on demande exactement `top_k`
+        (comportement inchange, pas de cout inutile).
+        """
+        if not self._reranking_enabled():
+            return top_k
+        return max(top_k, self.rerank_candidates)
 
     def search_documents(
         self,
@@ -221,7 +271,9 @@ class ToolRegistry:
         if not query or not query.strip():
             raise ToolError("search_documents: 'query' ne peut pas être vide")
 
-        results = self.hybrid_search.search(query, top_k=top_k, filters=filters)
+        results = self.hybrid_search.search(
+            query, top_k=self._candidate_top_k(top_k), filters=filters
+        )
         results, was_reranked = self._rerank(query, results, top_k)
         self._remember_results(results)
         return {
@@ -241,7 +293,9 @@ class ToolRegistry:
         if not hasattr(self.hybrid_search, "search_multi"):
             raise ToolError("search_multi non supporté par ce moteur de recherche")
 
-        results = self.hybrid_search.search_multi(queries, top_k=top_k, filters=filters)
+        results = self.hybrid_search.search_multi(
+            queries, top_k=self._candidate_top_k(top_k), filters=filters
+        )
         results, was_reranked = self._rerank(queries[0], results, top_k)
         self._remember_results(results)
         return {
