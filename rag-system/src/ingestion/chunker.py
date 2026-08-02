@@ -241,6 +241,52 @@ class Chunker:
 
         return morceaux or [text[:limit]]
 
+    @staticmethod
+    def _queue_recouvrement(texte: str, co: int) -> str:
+        """
+        Queue de recouvrement d'un fragment, alignee sur un debut de mot.
+
+        Le recouvrement reprend les `co` derniers caracteres du fragment
+        precedent. Pris tels quels, ils tombent presque toujours au milieu
+        d'un mot : le fragment suivant commencait par "ces et reseau" pour
+        "acces et reseau", ou "vant d'etre delivree" pour "avant d'etre
+        delivree". Constate sur les etudes d'impact du corpus wpd, ou six
+        extraits sur quinze transmis au modele demarraient ainsi.
+
+        Le cout est double : l'extrait presente au modele s'ouvre sur un
+        mot mutile, et le vecteur dense est calcule sur ce meme texte.
+
+        La queue est donc avancee jusqu'a la premiere frontiere de mot.
+        Elle en ressort au plus egale a `co`, jamais plus longue, ce qui
+        preserve la borne de taille des fragments. Si aucune frontiere de
+        mot ne s'y trouve, le recouvrement est abandonne plutot que
+        tronque.
+        """
+        if co <= 0 or not texte:
+            return ""
+        if len(texte) <= co:
+            # Comportement anterieur conserve : un fragment plus court que
+            # le recouvrement ne produit pas de queue. Le renvoyer entier
+            # rendrait le fragment suivant identique au precedent.
+            return ""
+
+        debut = len(texte) - co
+        # Deja aligne : le caractere precedent est un blanc.
+        if texte[debut - 1].isspace():
+            return texte[debut:]
+
+        avance = re.search(r"\s", texte[debut:])
+        if avance is None:
+            # Aucune frontiere de mot dans la queue : elle tombe a
+            # l'interieur d'un jeton unique plus long qu'elle (URL,
+            # identifiant, cellule de tableau compacte), ou le recouvrement
+            # demande est plus court qu'un mot. Recouvrir avec une bribe de
+            # jeton n'apporte aucun contexte au fragment suivant et lui fait
+            # ouvrir sur un mot mutile. On renonce au recouvrement.
+            return ""
+
+        return texte[debut + avance.end():]
+
     def _chunk_by_sentence(self, content, doc_id, file_path, file_name, file_context, metadata, resolved):
         cs = resolved.get("chunk_size", self.chunk_size)
         co = resolved.get("chunk_overlap", self.chunk_overlap)
@@ -277,7 +323,7 @@ class Chunker:
                 text = current_chunk.strip()
                 chunks.append(self._make_chunk(text, file_context, doc_id, file_path, file_name, metadata, chunk_idx, start_char, start_char + len(current_chunk)))
                 chunk_idx += 1
-                overlap_text = current_chunk[-co:] if len(current_chunk) > co else ""
+                overlap_text = self._queue_recouvrement(current_chunk, co)
                 start_char = start_char + len(current_chunk) - len(overlap_text)
                 current_chunk = overlap_text
 
