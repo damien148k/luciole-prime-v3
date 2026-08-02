@@ -17,6 +17,7 @@ tool itératif plutôt que pipeline statique.
 import json
 import re
 import time
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -249,6 +250,12 @@ class AgentOrchestrator:
         trace: List[Dict] = []
         observations: List[str] = []
         rejected_final_answers: List[str] = []
+        # Requetes de recherche deja envoyees au moteur pendant CE run,
+        # sous forme normalisee. Locale a run() comme
+        # rejected_final_answers : le ToolRegistry est un singleton
+        # partage entre requetes, un etat d'instance fuirait d'un run a
+        # l'autre.
+        recherches_vues: set = set()
 
         original_query = query
         rewritten_queries, query_type, was_rewritten = self._apply_query_rewriting(query)
@@ -425,6 +432,38 @@ class AgentOrchestrator:
                 return self._finalize(trace, message, [], step, reason)
 
             # Tool intermédiaire (search_documents, get_document, etc.)
+            recherche_repetee = self._recherche_deja_faite(
+                tool_name, tool_args, recherches_vues
+            )
+            if recherche_repetee is not None:
+                # Le prompt demande déjà de ne pas relancer une recherche
+                # identique, mais les modèles la rejouent jusqu'à épuiser
+                # max_steps (observé : 5 fois la même chaîne sur un cas
+                # réel). Une consigne textuelle ne suffit pas, on bloque
+                # mécaniquement et on le dit dans l'observation.
+                logger.warning(
+                    f"Étape {step}: recherche déjà effectuée, non rejouée "
+                    f"({recherche_repetee[:80]!r})"
+                )
+                observation = (
+                    f"Recherche déjà effectuée à l'identique plus tôt dans "
+                    f"cette exécution : {recherche_repetee!r}. Elle n'a pas "
+                    f"été relancée, le résultat serait identique. Reformule "
+                    f"avec une phrase différente et des termes nouveaux, ou "
+                    f"conclus avec les informations déjà obtenues."
+                )
+                trace.append({
+                    "step": step,
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "result": None,
+                    "error": None,
+                    "duration_ms": duration_ms,
+                    "note": "recherche_repetee_bloquee",
+                })
+                observations.append(observation)
+                continue
+
             try:
                 tool_result = self.tools.call(tool_name, tool_args, allowed=tools_allowed)
                 observation = self._format_observation(tool_name, tool_result)
@@ -555,6 +594,54 @@ Réponds UNIQUEMENT avec un objet JSON de la forme:
 {{"tool": "nom_de_l_outil", "args": {{...}}}}
 
 Aucun texte avant ou après le JSON."""
+
+    # =========================================================================
+    # GARDE-FOU : RECHERCHES REPETEES
+    # =========================================================================
+
+    OUTILS_DE_RECHERCHE = {"search_documents": "query", "search_multi": "queries"}
+
+    @staticmethod
+    def _normaliser_requete(texte: str) -> str:
+        """Forme canonique d'une requete pour comparer deux recherches.
+
+        Insensible a la casse, aux accents, a la ponctuation et aux espaces
+        multiples : 'Bilan de mortalite, parcs voisins' et
+        'bilan  de mortalité parcs voisins' sont la meme recherche.
+        """
+        sans_accents = unicodedata.normalize("NFKD", str(texte or ""))
+        sans_accents = "".join(c for c in sans_accents if not unicodedata.combining(c))
+        mots = re.findall(r"[a-z0-9]+", sans_accents.lower())
+        return " ".join(mots)
+
+    @classmethod
+    def _recherche_deja_faite(cls, tool_name, tool_args, deja_vues):
+        """Retourne la requete repetee, ou None si la recherche est nouvelle.
+
+        Enregistre au passage les requetes nouvelles dans `deja_vues`.
+        Pour search_multi, la repetition n'est signalee que si TOUTES les
+        variantes ont deja ete jouees : si une seule est inedite, l'appel
+        garde de la valeur et doit passer.
+        """
+        champ = cls.OUTILS_DE_RECHERCHE.get(tool_name)
+        if champ is None:
+            return None
+
+        brut = (tool_args or {}).get(champ)
+        requetes = brut if isinstance(brut, (list, tuple)) else [brut]
+        requetes = [str(q) for q in requetes if str(q or "").strip()]
+        if not requetes:
+            # Requete vide : laisser le ToolRegistry lever sa ToolError,
+            # ce n'est pas le role de ce garde-fou.
+            return None
+
+        normalisees = [cls._normaliser_requete(q) for q in requetes]
+        inedites = [n for n in normalisees if n and n not in deja_vues]
+        if not inedites:
+            return " | ".join(requetes)
+
+        deja_vues.update(inedites)
+        return None
 
     # =========================================================================
     # PARSING DE LA DÉCISION DU LLM
