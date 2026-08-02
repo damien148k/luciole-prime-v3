@@ -201,6 +201,46 @@ class Chunker:
     # SENTENCE CHUNKING
     # =========================================================================
 
+    def _split_oversized(self, text: str, limit: int, overlap: int) -> List[str]:
+        """
+        Decoupe une unite (phrase, paragraphe) plus longue que la limite.
+
+        Le decoupage en phrases repose sur la ponctuation. Un tableau, un
+        sommaire, une legende de carte ou une liste a puces n'en contiennent
+        pas : l'unite produite peut alors faire plusieurs dizaines de milliers
+        de caracteres. Sans borne, ce fragment part tel quel vers l'encodeur
+        et sature la memoire du GPU.
+
+        La coupure est cherchee sur un caractere blanc en fin de fenetre afin
+        de ne pas tronquer un mot au milieu.
+        """
+        if limit <= 0 or len(text) <= limit:
+            return [text]
+
+        pas = max(1, limit - max(0, overlap))
+        morceaux: List[str] = []
+        debut = 0
+
+        while debut < len(text):
+            fin = min(debut + limit, len(text))
+            if fin < len(text):
+                fenetre = text.rfind(" ", debut + pas // 2, fin)
+                if fenetre > debut:
+                    fin = fenetre
+            morceau = text[debut:fin].strip()
+            if morceau:
+                morceaux.append(morceau)
+            if fin >= len(text):
+                break
+            suivant = max(fin - max(0, overlap), debut + 1)
+            if overlap > 0 and suivant < len(text) and not text[suivant - 1].isspace():
+                blanc = text.find(" ", suivant, fin)
+                if blanc != -1 and blanc + 1 < fin:
+                    suivant = blanc + 1
+            debut = suivant
+
+        return morceaux or [text[:limit]]
+
     def _chunk_by_sentence(self, content, doc_id, file_path, file_name, file_context, metadata, resolved):
         cs = resolved.get("chunk_size", self.chunk_size)
         co = resolved.get("chunk_overlap", self.chunk_overlap)
@@ -211,11 +251,28 @@ class Chunker:
         start_char = 0
         chunk_idx = 0
 
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
+        unites = []
+        surdimensionnees = 0
+        for brute in sentences:
+            brute = brute.strip()
+            if not brute:
                 continue
+            if len(brute) > cs:
+                surdimensionnees += 1
+                # Le fragment suivant demarre avec le recouvrement du
+                # precedent : on lui reserve sa place pour que la somme des
+                # deux ne depasse jamais la taille demandee.
+                unites.extend(self._split_oversized(brute, max(1, cs - co), co))
+            else:
+                unites.append(brute)
 
+        if surdimensionnees:
+            logger.warning(
+                f"{doc_id} : {surdimensionnees} unite(s) sans ponctuation depassant "
+                f"{cs} caracteres ont ete redecoupees (tableaux, sommaires ou listes)."
+            )
+
+        for sentence in unites:
             if len(current_chunk) + len(sentence) > cs and current_chunk:
                 text = current_chunk.strip()
                 chunks.append(self._make_chunk(text, file_context, doc_id, file_path, file_name, metadata, chunk_idx, start_char, start_char + len(current_chunk)))
@@ -247,11 +304,25 @@ class Chunker:
         start_char = 0
         chunk_idx = 0
 
-        for para in paragraphs:
-            para = para.strip()
-            if not para:
+        unites = []
+        surdimensionnes = 0
+        for brut in paragraphs:
+            brut = brut.strip()
+            if not brut:
                 continue
+            if len(brut) > cs:
+                surdimensionnes += 1
+                unites.extend(self._split_oversized(brut, cs, co))
+            else:
+                unites.append(brut)
 
+        if surdimensionnes:
+            logger.warning(
+                f"{doc_id} : {surdimensionnes} paragraphe(s) depassant {cs} "
+                f"caracteres ont ete redecoupes."
+            )
+
+        for para in unites:
             if len(current_chunk) + len(para) > cs and current_chunk:
                 text = current_chunk.strip()
                 chunks.append(self._make_chunk(text, file_context, doc_id, file_path, file_name, metadata, chunk_idx, start_char, start_char + len(current_chunk)))
