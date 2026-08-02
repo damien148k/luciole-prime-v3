@@ -17,6 +17,18 @@ import re
 import yaml
 
 
+# Les analyseurs de documents annoncent un type qui ne correspond pas toujours
+# a la clef utilisee dans chunking_strategies de settings.yaml. Sans cette
+# table, les strategies 'xlsx' et 'txt' n'etaient jamais appliquees.
+TYPE_ALIASES = {
+    "excel": "xlsx",
+    "text": "txt",
+    "doc": "docx",
+    "ppt": "pptx",
+    "email": "msg",
+}
+
+
 @dataclass
 class Chunk:
     """Represents a document chunk."""
@@ -59,6 +71,20 @@ class Chunker:
             f"Chunker initialized: size={chunk_size}, overlap={chunk_overlap}, "
             f"strategy={strategy}, context={include_file_context}, adaptive={adaptive}"
         )
+        if adaptive:
+            if self.chunking_strategies:
+                detail = ", ".join(
+                    f"{t}={c.get('chunk_size', chunk_size)}/{c.get('chunk_overlap', chunk_overlap)}"
+                    f":{c.get('strategy', strategy)}"
+                    for t, c in sorted(self.chunking_strategies.items())
+                )
+                logger.info(f"Chunker adaptatif : {detail}")
+            else:
+                logger.warning(
+                    "Chunker adaptatif demande mais aucune strategie par type "
+                    "n'a ete fournie : les valeurs globales seront appliquees "
+                    "a tous les formats."
+                )
 
     @classmethod
     def from_config(cls, config_path: str = "config/settings.yaml") -> "Chunker":
@@ -85,7 +111,7 @@ class Chunker:
                 "chunk_overlap": self.chunk_overlap,
             }
 
-        type_lower = doc_type.lower()
+        type_lower = TYPE_ALIASES.get(doc_type.lower(), doc_type.lower())
         if type_lower in self.chunking_strategies:
             cfg = self.chunking_strategies[type_lower]
             return {
