@@ -61,6 +61,15 @@ class Embedder:
         logger.warning(f"Modèle {model_name} non trouvé dans les caches: {cache_paths}")
         return None
 
+    # Budget de caracteres traites simultanement dans un lot d'encodage.
+    # Correspond au regime nominal observe : 32 fragments d'environ mille
+    # caracteres passent sans difficulte sur une carte de douze gigaoctets.
+    BUDGET_CARACTERES_PAR_LOT = 32000
+
+    # Au-dela, un fragment temoigne d'un decoupage defaillant en amont et
+    # merite une trace explicite dans le journal.
+    SEUIL_ALERTE_CARACTERES = 4000
+
     def __init__(
         self,
         model_name: str = "BAAI/bge-m3",
@@ -113,6 +122,26 @@ class Embedder:
         embedding = self.model.encode(text, convert_to_tensor=False)
         return embedding.tolist()
 
+    def _lot_adapte(self, longueur_max: int) -> int:
+        """
+        Reduit la taille du lot lorsque les textes sont longs.
+
+        La bibliotheque trie les textes par longueur avant de les grouper : les
+        fragments les plus longs se retrouvent donc ensemble dans un meme lot,
+        et le remplissage se fait sur le plus long d'entre eux. Le cout memoire
+        de l'attention croit avec le carre de la longueur de sequence. Un lot de
+        32 sequences proches du maximum du modele demande bien plus que la
+        memoire d'une carte de douze gigaoctets, ce qui se traduit non par une
+        erreur franche mais par un ralentissement sans fin.
+
+        On raisonne donc a budget de caracteres constant plutot qu'a nombre de
+        textes constant.
+        """
+        if longueur_max <= 0:
+            return self.batch_size
+        estime = self.BUDGET_CARACTERES_PAR_LOT // longueur_max
+        return max(1, min(self.batch_size, estime))
+
     def embed_chunks(self, chunks: List[Chunk]) -> List[dict]:
         if not chunks:
             return []
@@ -124,11 +153,26 @@ class Embedder:
                 text = "passage: " + text
             texts.append(text)
 
-        logger.info(f"Generating embeddings for {len(texts)} chunks (with file context)")
+        longueur_max = max(len(t) for t in texts)
+        lot = self._lot_adapte(longueur_max)
+
+        logger.info(
+            f"Generating embeddings for {len(texts)} chunks (with file context), "
+            f"longueur max {longueur_max} caracteres, lot {lot}"
+        )
+
+        if longueur_max > self.SEUIL_ALERTE_CARACTERES:
+            logger.warning(
+                f"Fragment anormalement long : {longueur_max} caracteres pour une "
+                f"cible de decoupage bien inferieure. Le cout de l'attention croit "
+                f"avec le carre de la longueur : le lot est reduit a {lot} pour eviter "
+                f"de saturer la memoire du peripherique. Verifiez la strategie de "
+                f"decoupage appliquee a ce document."
+            )
 
         embeddings = self.model.encode(
             texts,
-            batch_size=self.batch_size,
+            batch_size=lot,
             show_progress_bar=True,
             convert_to_tensor=False
         )
