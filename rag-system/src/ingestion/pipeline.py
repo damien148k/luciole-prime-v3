@@ -99,7 +99,9 @@ class IngestionPipeline:
             chunk_size=self.config["chunking"]["chunk_size"],
             chunk_overlap=self.config["chunking"]["chunk_overlap"],
             strategy=self.config["chunking"]["strategy"],
-            include_file_context=self.config["chunking"].get("include_file_context", True)
+            include_file_context=self.config["chunking"].get("include_file_context", True),
+            adaptive=self.config["chunking"].get("adaptive", False),
+            chunking_strategies=self.config.get("chunking_strategies", {}),
         )
         
         self.embedder = Embedder(
