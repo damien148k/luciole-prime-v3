@@ -98,12 +98,20 @@ class ToolRegistry:
                 "fn": self.search_documents,
                 "description": (
                     "Recherche hybride (BM25 + dense) dans le corpus documentaire. "
+                    "La partie dense encode la requête ENTIÈRE : une phrase "
+                    "complète reprenant les termes de la question donne de bien "
+                    "meilleurs résultats qu'une suite de mots-clés. "
                     "Utilise `filters` pour cibler des champs métier connus "
                     "(client, editor, technology, product, version, support_type, "
                     "severity, ticket_id, projet, phase, thematique, departement)."
                 ),
                 "args_schema": {
-                    "query": "str (obligatoire) - la requête de recherche",
+                    "query": (
+                        "str (obligatoire) - une phrase complète en langage "
+                        "naturel, reprenant les termes de la question de "
+                        "l'utilisateur. N'envoie PAS une liste de mots-clés "
+                        "télégraphiques : cela dégrade fortement la recherche."
+                    ),
                     "filters": "dict (optionnel) - ex: {\"editor\": \"fortinet\"}",
                     "top_k": "int (optionnel, défaut 10)",
                 },
@@ -113,10 +121,16 @@ class ToolRegistry:
                 "description": (
                     "Recherche hybride avec plusieurs formulations de la même "
                     "question, dédupliquée par meilleur score. À utiliser quand "
-                    "une seule requête ne suffit pas à couvrir le besoin."
+                    "une seule requête ne suffit pas à couvrir le besoin. "
+                    "Chaque variante doit être une phrase complète, pas une "
+                    "suite de mots-clés."
                 ),
                 "args_schema": {
-                    "queries": "list[str] (obligatoire) - variantes de la requête",
+                    "queries": (
+                        "list[str] (obligatoire) - variantes formulées en "
+                        "phrases complètes, angles différents de la même "
+                        "question (pas des troncatures les unes des autres)."
+                    ),
                     "filters": "dict (optionnel)",
                     "top_k": "int (optionnel, défaut 10)",
                 },
