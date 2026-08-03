@@ -138,21 +138,6 @@ class AgentRunRequest(BaseModel):
             "n'est jamais modifie."
         ),
     )
-    use_query_rewriter: Optional[bool] = Field(
-        default=None,
-        description=(
-            "Force l'activation ou la desactivation du QueryRewriter pour cet "
-            "appel uniquement. None laisse decider la configuration "
-            "(retrieval.agent_use_query_rewriter, ou AGENT_USE_QUERY_REWRITER). "
-            "Existe pour permettre une mesure A/B alternee sans redemarrer le "
-            "conteneur : un redemarrage entre deux campagnes deplace l'etat du "
-            "moteur d'inference et rend la comparaison illisible. Mesure du "
-            "2026-08-03 : deux campagnes lancees dos a dos rendent 16 reponses "
-            "identiques sur 20, deux campagnes separees par d'autres travaux "
-            "seulement 3 a 7. Les deux orchestrateurs coexistent en cache, "
-            "l'alternance ne reconstruit rien."
-        ),
-    )
 
 
 # ============================================================================
@@ -791,7 +776,7 @@ async def analyze(request: AnalyzeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def get_orchestrator(index_name: str = None, use_query_rewriter: bool = None):
+def get_orchestrator(index_name: str = None):
     """
     Retourne un AgentOrchestrator pret a l'emploi pour l'index donne, en
     reutilisant le meme HybridSearch/LLMGenerator/Reranker que le
@@ -807,18 +792,7 @@ def get_orchestrator(index_name: str = None, use_query_rewriter: bool = None):
 
     analyzer = get_analyzer(index_name=resolved_index)
 
-    # Le drapeau du rewriter entre dans la cle de cache : les deux variantes
-    # coexistent, ce qui permet d'alterner d'un appel a l'autre sans jamais
-    # reconstruire ni redemarrer le conteneur.
-    if use_query_rewriter is None:
-        use_query_rewriter = _env_flag(
-            "AGENT_USE_QUERY_REWRITER",
-            default=bool((_get_config().get("retrieval", {}) or {}).get(
-                "agent_use_query_rewriter", False)),
-        )
-    cle = (resolved_index, bool(use_query_rewriter))
-
-    cached = _orchestrators.get(cle)
+    cached = _orchestrators.get(resolved_index)
     if cached is not None and cached["analyzer"] is analyzer:
         return cached["orchestrator"]
 
@@ -843,29 +817,23 @@ def get_orchestrator(index_name: str = None, use_query_rewriter: bool = None):
         use_reranker=_use_reranker,
         rerank_candidates=int(_retrieval_cfg.get("fusion_top_k", 30)),
     )
-    # QueryRewriter desactive par defaut pour la boucle agentique. Le
-    # rewriter ajoute des suffixes codes en dur (« cartes plans
-    # cartographie », « photos photomontages », etc.) declenches par de
-    # simples mots-cles, en dehors de BUSINESS_RULES et donc invisibles
-    # depuis l'interface d'administration. Mesure du 2026-08-03 : 3 cas sur
-    # 20 du jeu MRAe etaient reformules a l'insu de l'operateur, ce qui
-    # rendait tout raisonnement sur ces cas ininterpretable.
-    # Le planificateur de l'agent formule deja ses propres requetes et sait
-    # les reformuler entre deux etapes ; une reformulation lexicale imposee
-    # en amont fait double emploi et masque son comportement.
-    # Mettre agent_use_query_rewriter a true dans settings.yaml pour le
-    # reactiver, ou AGENT_USE_QUERY_REWRITER=true pour une mesure A/B.
-    # Deja resolu plus haut (entre dans la cle de cache).
-    _use_rewriter = bool(use_query_rewriter)
+    # Pas de QueryRewriter dans la boucle agentique. Retire le 2026-08-03
+    # sur mesure : huit campagnes dos a dos du jeu MRAe, quatre avec et
+    # quatre sans, ordre alterne equilibre. Aucun verdict change, ni dans un
+    # sens ni dans l'autre, y compris sur les trois seuls cas que le
+    # rewriter declenche. Cout mesure : 50 a 100 pour cent de requetes
+    # supplementaires sur ces trois cas, le rewriter remplacant la requete
+    # distillee par le planificateur par la question recopiee mot pour mot.
+    # Le planificateur formule ses propres requetes, sait les reformuler
+    # entre deux etapes, et l'ecrit dans sa trace. Une reformulation
+    # lexicale imposee en amont fait double emploi et masque son
+    # comportement. Le module reste utilise par le pipeline /api/query.
     orchestrator = AgentOrchestrator(
         tool_registry=tool_registry,
         llm_generator=analyzer.llm_generator,
-        query_rewriter=_get_query_rewriter() if _use_rewriter else None,
     )
-    logger.info(
-        f"Agent: reranker={_use_reranker}, query_rewriter={_use_rewriter}"
-    )
-    _orchestrators[cle] = {"analyzer": analyzer, "orchestrator": orchestrator}
+    logger.info(f"Agent: reranker={_use_reranker}, query_rewriter=False (retire)")
+    _orchestrators[resolved_index] = {"analyzer": analyzer, "orchestrator": orchestrator}
     return orchestrator
 
 
@@ -894,10 +862,7 @@ async def agent_run(request: AgentRunRequest):
         _t0 = time.time()
         resolved_index = _resolve_index_name(request.index_name)
         profile = load_profile(request.profile) if request.profile else load_profile()
-        orchestrator = get_orchestrator(
-            index_name=resolved_index,
-            use_query_rewriter=request.use_query_rewriter,
-        )
+        orchestrator = get_orchestrator(index_name=resolved_index)
 
         history = [msg.dict() for msg in request.history] if request.history else None
 
@@ -911,9 +876,6 @@ async def agent_run(request: AgentRunRequest):
 
         result["index_name"] = resolved_index
         result["profile_name"] = profile.get("name")
-        # Trace explicite : une campagne doit pouvoir prouver, ligne par ligne,
-        # dans quelle branche elle a tourne.
-        result["query_rewriter_actif"] = orchestrator.query_rewriter is not None
         result["mode"] = result.get("result_type", "agentic")
         _elapsed_ms = int((time.time() - _t0) * 1000)
         result["processing_time_ms"] = _elapsed_ms
@@ -936,26 +898,6 @@ async def agent_run(request: AgentRunRequest):
                 p["section"] = meta["section"]
             passages.append(p)
         result["passages"] = passages
-
-        # query_rewriting : meme forme que /api/query (le frontend lit ce
-        # nom de champ, pas query_rewritten expose par l'orchestrateur).
-        # La valeur reecrite elle-meme n'est exposee que dans trace[0]
-        # (entree "query_rewriting" ajoutee en etape pre-boucle, cf PR A) :
-        # l'orchestrateur n'expose que le booleen query_rewritten au niveau
-        # racine du resultat.
-        if result.get("query_rewritten"):
-            rewritten_value = request.query
-            for step in result.get("trace", []):
-                if step.get("tool") == "query_rewriting":
-                    variants = step.get("result", {}).get("rewritten_queries") or []
-                    if variants:
-                        rewritten_value = variants[0]
-                    break
-            result["query_rewriting"] = {
-                "original": request.query,
-                "rewritten": rewritten_value,
-                "type": result.get("query_type", "general"),
-            }
 
         _log_agent_run(
             profile_name=profile.get("name"),
