@@ -817,13 +817,29 @@ def get_orchestrator(index_name: str = None):
         use_reranker=_use_reranker,
         rerank_candidates=int(_retrieval_cfg.get("fusion_top_k", 30)),
     )
-    # Reutilise le meme QueryRewriter singleton que le pipeline classique
-    # /api/query (voir _get_query_rewriter), pour que l'agent beneficie de
-    # la meme reformulation de requete sans dupliquer son chargement.
+    # QueryRewriter desactive par defaut pour la boucle agentique. Le
+    # rewriter ajoute des suffixes codes en dur (« cartes plans
+    # cartographie », « photos photomontages », etc.) declenches par de
+    # simples mots-cles, en dehors de BUSINESS_RULES et donc invisibles
+    # depuis l'interface d'administration. Mesure du 2026-08-03 : 3 cas sur
+    # 20 du jeu MRAe etaient reformules a l'insu de l'operateur, ce qui
+    # rendait tout raisonnement sur ces cas ininterpretable.
+    # Le planificateur de l'agent formule deja ses propres requetes et sait
+    # les reformuler entre deux etapes ; une reformulation lexicale imposee
+    # en amont fait double emploi et masque son comportement.
+    # Mettre agent_use_query_rewriter a true dans settings.yaml pour le
+    # reactiver, ou AGENT_USE_QUERY_REWRITER=true pour une mesure A/B.
+    _use_rewriter = _env_flag(
+        "AGENT_USE_QUERY_REWRITER",
+        default=bool(_retrieval_cfg.get("agent_use_query_rewriter", False)),
+    )
     orchestrator = AgentOrchestrator(
         tool_registry=tool_registry,
         llm_generator=analyzer.llm_generator,
-        query_rewriter=_get_query_rewriter(),
+        query_rewriter=_get_query_rewriter() if _use_rewriter else None,
+    )
+    logger.info(
+        f"Agent: reranker={_use_reranker}, query_rewriter={_use_rewriter}"
     )
     _orchestrators[resolved_index] = {"analyzer": analyzer, "orchestrator": orchestrator}
     return orchestrator
