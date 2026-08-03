@@ -61,11 +61,22 @@ class LLMGenerator:
 
         # Nom du modèle exposé par le serveur TRT-LLM (= SERVED_MODEL_NAME)
         self.model       = llm_config.get("model",       "qwen3-30b-a3b-instruct")
-        self.temperature = llm_config.get("temperature",  0.1)
+        # Temperature 0 par defaut : la boucle agentique est une cascade, une
+        # divergence d'un token a l'etape 1 change la requete, donc les
+        # passages, donc la reponse. Mesure du 2026-08-03 : a temperature 0.1
+        # sans germe, mrae-01 rend no_answer 4 fois sur 5 et final_answer la
+        # cinquieme, mrae-08 bascule 3 contre 2. Un verdict par cas n'etait
+        # pas reproductible, donc aucun diagnostic ne l'etait non plus.
+        self.temperature = llm_config.get("temperature",  0.0)
         self.max_tokens  = llm_config.get("max_tokens",   4096)
         self.timeout     = llm_config.get("timeout",      300)
         # num_ctx non requis par TRT-LLM (context window compilée au build time)
         self.num_ctx     = llm_config.get("num_ctx",      32768)
+        # Germe transmis a chaque appel. Sans effet sur TRT-LLM, honore par
+        # l'endpoint compatible OpenAI d'Ollama. `None` laisse le serveur
+        # choisir, pour ne pas imposer le determinisme aux profils qui
+        # voudraient de la variete.
+        self.seed        = llm_config.get("seed",         42)
 
     def _load_prompts_config(self):
         if load_prompts is not None:
@@ -157,6 +168,23 @@ class LLMGenerator:
             "temperature": self.temperature,
             "max_tokens":  self.max_tokens,
         }
+        # Le germe n'etait transmis nulle part avant le 2026-08-03, ce qui
+        # rendait la boucle agentique non reproductible d'un passage a
+        # l'autre. Omis quand il vaut None, pour ne pas envoyer un champ
+        # inconnu a un backend qui ne le gere pas.
+        if self.seed is not None:
+            payload["seed"] = self.seed
+        # num_ctx etait lu a l'initialisation et jamais transmis. Ollama
+        # l'accepte via `options` sur son API native ; sur l'endpoint
+        # compatible OpenAI il est ignore, la fenetre venant du Modelfile.
+        # On le journalise donc plutot que de laisser croire qu'il agit.
+        if self.num_ctx and not getattr(self, "_num_ctx_signale", False):
+            logger.info(
+                f"num_ctx={self.num_ctx} lu depuis la configuration mais non "
+                "transmis : la fenetre effective est celle declaree cote "
+                "serveur (Modelfile Ollama ou build TRT-LLM)."
+            )
+            self._num_ctx_signale = True
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 r = client.post(url, json=payload)
