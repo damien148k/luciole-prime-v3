@@ -37,12 +37,43 @@ OBSERVATION_METADATA_MAX = 6
 # Les observations etant desormais riches, le repli de fin de boucle doit etre
 # borne : il est affiche tel quel a l'utilisateur.
 FALLBACK_OBSERVATION_CHARS = 800
-OBSERVATION_METADATA_PRIORITY = (
-    "page_start", "page_end",
+# Deux tuples plutot qu'un seul, pour que l'affichage de page_start /
+# page_end dans les observations soit un choix explicite et non un effet
+# de bord. La bascule est faite au demarrage du service via
+# `configurer_pages_dans_observations`, appelee depuis `api.py` en lisant
+# `agent.observation_pages` de settings.yaml (voir aussi la variable
+# d'environnement `AGENT_OBSERVATION_PAGES`).
+_OBSERVATION_METADATA_METIER = (
     "ticket_id", "product", "version", "technology", "support_type",
     "severity", "projet", "phase", "thematique", "departement",
     "editor", "client",
 )
+OBSERVATION_METADATA_PRIORITY = _OBSERVATION_METADATA_METIER
+# Cles supplementaires a exclure entierement de l'affichage quand le
+# drapeau est desactive : sans cela, la branche `extra` de
+# `_format_metadata` remettrait page_start / page_end en fin de ligne, ce
+# qui reviendrait a ne pas avoir de drapeau du tout.
+OBSERVATION_METADATA_MASQUEES: frozenset = frozenset({"page_start", "page_end"})
+
+
+def configurer_pages_dans_observations(actif: bool) -> None:
+    """Ajoute ou retire page_start / page_end de l'affichage.
+
+    Effet a la fois sur les observations transmises au planificateur et
+    sur les traces rendues a l'utilisateur. A n'appeler qu'au demarrage
+    du service ou depuis un point de rechargement de configuration : la
+    priorite et le masque sont un etat de module partage entre toutes
+    les instances de `AgentOrchestrator`.
+    """
+    global OBSERVATION_METADATA_PRIORITY, OBSERVATION_METADATA_MASQUEES
+    if actif:
+        OBSERVATION_METADATA_PRIORITY = (
+            "page_start", "page_end",
+        ) + _OBSERVATION_METADATA_METIER
+        OBSERVATION_METADATA_MASQUEES = frozenset()
+    else:
+        OBSERVATION_METADATA_PRIORITY = _OBSERVATION_METADATA_METIER
+        OBSERVATION_METADATA_MASQUEES = frozenset({"page_start", "page_end"})
 
 # Sorties terminales de la boucle, toujours proposees au LLM meme si le
 # profil client ne les declare pas : sans elles il n'a aucun moyen propre
@@ -696,6 +727,7 @@ Aucun texte avant ou après le JSON."""
         extra = sorted(
             k for k in metadata
             if k not in OBSERVATION_METADATA_PRIORITY
+            and k not in OBSERVATION_METADATA_MASQUEES
             and metadata.get(k) not in (None, "")
         )
         keys = (known + extra)[:OBSERVATION_METADATA_MAX]

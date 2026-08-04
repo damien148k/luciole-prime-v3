@@ -58,6 +58,11 @@ agent:
   port: 8500
   cache_ttl: 0
   default_detail_level: standard
+  # Affiche page_start / page_end dans les metadonnees observees par le
+  # planificateur. Desactive par defaut : l'activer modifie ce que le
+  # modele lit et biaise donc toute comparaison A/B. La variable
+  # d'environnement AGENT_OBSERVATION_PAGES a priorite sur cette cle.
+  observation_pages: false
 
 chunking:
   chunk_size: 800
