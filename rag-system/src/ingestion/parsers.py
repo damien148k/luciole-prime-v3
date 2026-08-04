@@ -225,27 +225,47 @@ class PDFParser(BaseParser):
             end = min(start + batch_size, page_count)
             pages = list(range(start, end))
             
+            # Le batch est prepare a part avant d'etre verse dans le texte
+            # et la table de pagination. Verser au fil de la boucle exposait
+            # a un etat incoherent : une exception levee apres l'ajout du
+            # texte d'une page mais avant l'ajout de son span faisait rejouer
+            # tout le batch par le repli, dupliquant le texte sans avancer
+            # `offset`. Toutes les positions suivantes devenaient fausses.
+            lot: List[Tuple[str, int]] = []
+
             try:
                 page_dicts = pymupdf4llm.to_markdown(file_path, pages=pages, page_chunks=True)
-                for page_dict in page_dicts:
+                if len(page_dicts) != len(pages):
+                    raise ValueError(
+                        f"pymupdf4llm a renvoye {len(page_dicts)} pages pour "
+                        f"{len(pages)} demandees"
+                    )
+                # Le numero de page vient de `pages`, jamais des metadonnees.
+                # La clef y varie selon la version et les greffons installes
+                # ("page" ou "page_number" selon la presence de
+                # pymupdf_layout), alors que l'ordre de retour suit toujours
+                # l'ordre demande.
+                for p, page_dict in zip(pages, page_dicts):
                     text = page_dict.get("text") or ""
                     if text:
-                        all_parts.append(text)
-                        page_num = page_dict["metadata"]["page"]
-                        page_spans.append((offset, offset + len(text), page_num))
-                        offset += len(text)
+                        lot.append((text, p + 1))
                 logger.debug(f"pymupdf4llm pages {start+1}-{end}/{page_count} OK")
             except Exception as e:
                 logger.warning(f"pymupdf4llm échoué pages {start+1}-{end}: {e} - fallback extraction simple")
-                # Fallback page par page avec extraction simple pour ce batch
+                # Fallback page par page avec extraction simple pour ce batch.
+                # `lot` est reinitialise : rien du tour precedent ne subsiste.
+                lot = []
                 doc = pymupdf.open(file_path)
                 for p in pages:
                     text = doc[p].get_text("text")
                     if text.strip():
-                        all_parts.append(text)
-                        page_spans.append((offset, offset + len(text), p + 1))
-                        offset += len(text)
+                        lot.append((text, p + 1))
                 doc.close()
+
+            for text, page_num in lot:
+                all_parts.append(text)
+                page_spans.append((offset, offset + len(text), page_num))
+                offset += len(text)
             
             # Log de progression tous les 50 pages
             if end % 50 == 0 or end == page_count:

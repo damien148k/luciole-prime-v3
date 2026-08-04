@@ -218,6 +218,68 @@ class Chunker:
         page_end = page_spans[idx_fin][2]
         return page_start, page_end
 
+    @staticmethod
+    def _reprendre_apres_recouvrement(
+        unites_du_fragment: List[Tuple[int, int, int]],
+        longueur_recouvrement: int,
+    ) -> Tuple[Optional[int], List[Tuple[int, int, int]]]:
+        """
+        Position reelle du debut de la queue de recouvrement, et etat des
+        unites a reporter dans le fragment suivant.
+
+        La queue est un suffixe de `current_chunk`, chaine construite en
+        collant les unites avec un espace simple. Ce separateur synthetique
+        ne correspond pas au separateur reel du document (saut de ligne,
+        blancs multiples), ce qui rend la queue introuvable par
+        `content.find` des qu'elle traverse une jonction. Sa position est
+        donc deduite des unites qui la composent, chacune connaissant sa
+        position reelle et sa contribution exacte a `current_chunk`.
+
+        On remonte les unites depuis la fin en cumulant leurs contributions
+        jusqu'a couvrir la longueur de la queue. L'unite qui la fait basculer
+        n'y entre generalement qu'en partie : le decalage `d` a l'interieur
+        de sa contribution donne directement la position reelle recherchee,
+        `position + d`, tant que `d` tombe dans le texte de l'unite. Si `d`
+        tombe sur l'espace de jonction qui la suit, la queue commence en
+        realite a l'unite suivante.
+
+        Retourne (position ou None, unites reportees). La position vaut None
+        quand la queue est vide ou quand les unites disponibles ne suffisent
+        pas a la couvrir : le fragment suivant prendra alors la position de
+        sa premiere unite entiere, sans jamais rester bloque sans position.
+        """
+        if longueur_recouvrement <= 0 or not unites_du_fragment:
+            return None, []
+
+        cumul = 0
+        indice = len(unites_du_fragment)
+        for i in range(len(unites_du_fragment) - 1, -1, -1):
+            cumul += unites_du_fragment[i][1]
+            indice = i
+            if cumul >= longueur_recouvrement:
+                break
+        else:
+            # Les unites connues ne couvrent pas toute la queue : cela
+            # signifie que le fragment ferme contenait deja un report dont
+            # la chaine de positions etait rompue.
+            return None, []
+
+        position, contribution, longueur_texte = unites_du_fragment[indice]
+        decalage = cumul - longueur_recouvrement
+
+        if decalage <= longueur_texte:
+            reportees = [
+                (position + decalage, contribution - decalage, longueur_texte - decalage)
+            ] + list(unites_du_fragment[indice + 1:])
+            return position + decalage, reportees
+
+        # Le decalage tombe sur l'espace de jonction suivant l'unite : la
+        # queue commence a l'unite d'apres, si elle existe.
+        reportees = list(unites_du_fragment[indice + 1:])
+        if not reportees:
+            return None, []
+        return reportees[0][0], reportees
+
     def _make_chunk(self, text: str, file_context: str, doc_id: str, file_path: str, file_name: str, metadata: Dict, chunk_idx: int, start_char: int, end_char: int) -> Chunk:
         text_with_context = f"{file_context}\n{text}" if self.include_file_context else text
 
@@ -385,6 +447,13 @@ class Chunker:
         # Fin reelle du contenu deja accumule dans current_chunk (avant
         # d'ajouter l'espace de separation final).
         fin_reelle: Optional[int] = None
+        # Unites presentes dans current_chunk, sous la forme
+        # (position_reelle, contribution_a_current_chunk, longueur_du_texte).
+        # La contribution compte l'espace de jonction ajoute apres l'unite ;
+        # la longueur du texte ne le compte pas. L'ecart entre les deux est
+        # ce qui rend la queue de recouvrement introuvable par recherche
+        # textuelle et impose de calculer sa position.
+        unites_du_fragment: List[Tuple[int, int, int]] = []
 
         unites = []
         surdimensionnees = 0
@@ -418,30 +487,36 @@ class Chunker:
                     fin_reelle if fin_reelle is not None else -1,
                 ))
                 chunk_idx += 1
+                # La queue de recouvrement n'est pas une unite du document :
+                # `current_chunk` colle les unites avec un espace simple la
+                # ou le document porte un saut de ligne ou plusieurs blancs.
+                # La rechercher dans `content` echouait des qu'elle traversait
+                # une jonction, et l'echec ne se rattrapait jamais, la
+                # condition de reprise portant sur un `current_chunk` vide
+                # alors qu'il contient precisement cette queue. Sur les
+                # etudes d'impact du corpus wpd, 117 fragments sur 132
+                # ressortaient ainsi sans page.
+                #
+                # Sa position est desormais calculee, pas cherchee : les
+                # unites du fragment ferme sont connues avec leur position
+                # reelle et leur contribution exacte a `current_chunk`.
                 overlap_text = self._queue_recouvrement(current_chunk, co)
-                overlap_strip = overlap_text.strip()
-                if overlap_strip and fin_reelle is not None and chunk_start_reel is not None:
-                    # La queue de recouvrement peut porter un espace de
-                    # jonction synthetique ("sentence + ' '") en bord, qui ne
-                    # correspond pas forcement au separateur reel dans
-                    # content (saut de ligne, espaces multiples...). On
-                    # localise donc sa version strippee, sous-chaine sure de
-                    # l'unite d'origine, en cherchant a rebours dans la zone
-                    # du chunk qui vient d'etre ferme pour limiter le risque
-                    # de collision avec une occurrence similaire ailleurs.
-                    pos_overlap = content.rfind(overlap_strip, chunk_start_reel, fin_reelle + 1)
-                    chunk_start_reel = pos_overlap if pos_overlap != -1 else None
-                    fin_reelle = (pos_overlap + len(overlap_strip)) if pos_overlap != -1 else None
-                else:
-                    chunk_start_reel = None
-                    fin_reelle = None
+                chunk_start_reel, unites_du_fragment = self._reprendre_apres_recouvrement(
+                    unites_du_fragment, len(overlap_text)
+                )
                 current_chunk = overlap_text
 
-            if not current_chunk and pos_reelle != -1:
+            if chunk_start_reel is None and pos_reelle != -1:
                 chunk_start_reel = pos_reelle
 
             current_chunk += sentence + " "
-            fin_reelle = (pos_reelle + len(sentence)) if pos_reelle != -1 else None
+            if pos_reelle != -1:
+                fin_reelle = pos_reelle + len(sentence)
+                unites_du_fragment.append((pos_reelle, len(sentence) + 1, len(sentence)))
+            else:
+                # Unite non localisee : la chaine de positions du fragment
+                # est rompue, on repart de la prochaine unite localisee.
+                unites_du_fragment = []
 
         if current_chunk.strip():
             text = current_chunk.strip()
@@ -506,11 +581,12 @@ class Chunker:
                 fin_reelle = None
                 current_chunk = ""
 
-            if not current_chunk and pos_reelle != -1:
+            if chunk_start_reel is None and pos_reelle != -1:
                 chunk_start_reel = pos_reelle
 
             current_chunk += para + "\n\n"
-            fin_reelle = (pos_reelle + len(para)) if pos_reelle != -1 else None
+            if pos_reelle != -1:
+                fin_reelle = pos_reelle + len(para)
 
         if current_chunk.strip():
             text = current_chunk.strip()

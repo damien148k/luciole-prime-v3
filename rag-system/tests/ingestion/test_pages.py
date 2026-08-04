@@ -281,3 +281,191 @@ class TestUniteAvecRecouvrementIntraUnite:
             # si elle ne recouvre pas caractere pour caractere un texte
             # de fragment localement duplique.
             assert 0 <= chunk.start_char < chunk.end_char <= len(content)
+
+
+class TestRepliEnCoursDeBatch:
+    """
+    Trou de couverture constate sur le corpus reel wpd : pymupdf4llm
+    echouait sur les six batchs d'un tome, et le repli laissait la table
+    de pagination desynchronisee du texte.
+
+    L'ancienne boucle versait le texte de chaque page dans `all_parts`
+    avant de lire son numero de page. Quand cette lecture levait, le
+    texte etait deja ajoute mais ni le span ni `offset` ne l'etaient : le
+    repli rejouait alors tout le batch et le texte se retrouvait en
+    double, decalant toutes les positions suivantes.
+
+    Les tests precedents ne prenaient jamais le chemin du repli.
+    """
+
+    def test_repli_ne_duplique_pas_le_texte(self, pdf_multi_pages: Path, monkeypatch) -> None:
+        import src.ingestion.parsers as parsers_module
+
+        def to_markdown_qui_echoue(file_path, pages=None, page_chunks=False, **kwargs):
+            # Reproduit exactement l'ancien defaut : un retour valide dont
+            # les metadonnees ne portent pas la clef attendue. Le code
+            # appelant doit soit s'en passer, soit basculer proprement.
+            return [
+                {"text": f"texte factice page {p}\n", "metadata": {"page_number": p + 1}}
+                for p in (pages or [])
+            ]
+
+        monkeypatch.setattr(parsers_module.pymupdf4llm, "to_markdown", to_markdown_qui_echoue)
+
+        parser = parsers_module.PDFParser(enable_ocr=False)
+        result = parser.parse(str(pdf_multi_pages))
+
+        content = result["content"]
+        page_spans = result["metadata"]["page_spans"]
+
+        assert page_spans, "page_spans doit rester renseignee"
+        # Chaque span doit pointer sur le texte reel a cette position.
+        for debut, fin, numero_page in page_spans:
+            assert content[debut:fin] == f"texte factice page {numero_page - 1}\n"
+        # Le dernier span doit fermer exactement sur la fin du contenu :
+        # aucun texte n'est ajoute sans span correspondant.
+        assert page_spans[-1][1] == len(content)
+
+    def test_repli_sur_exception_reste_coherent(self, pdf_multi_pages: Path, monkeypatch) -> None:
+        import src.ingestion.parsers as parsers_module
+
+        def to_markdown_qui_leve(file_path, pages=None, page_chunks=False, **kwargs):
+            raise KeyError("page")
+
+        monkeypatch.setattr(parsers_module.pymupdf4llm, "to_markdown", to_markdown_qui_leve)
+
+        parser = parsers_module.PDFParser(enable_ocr=False)
+        result = parser.parse(str(pdf_multi_pages))
+
+        content = result["content"]
+        page_spans = result["metadata"]["page_spans"]
+
+        assert page_spans, "le repli doit produire une table de pagination"
+        # Aucune duplication : la somme des longueurs de spans couvre tout
+        # le contenu, sans trou ni recouvrement.
+        assert page_spans[0][0] == 0
+        assert page_spans[-1][1] == len(content)
+        for i in range(len(page_spans) - 1):
+            assert page_spans[i][1] == page_spans[i + 1][0]
+        # Les numeros de page suivent l'ordre du document, en base 1.
+        assert [p for _, _, p in page_spans] == sorted(p for _, _, p in page_spans)
+        assert min(p for _, _, p in page_spans) >= 1
+
+    def test_numero_de_page_independant_de_la_clef_de_metadonnees(
+        self, pdf_multi_pages: Path, monkeypatch
+    ) -> None:
+        """
+        La clef portant le numero de page varie selon la version de
+        pymupdf4llm et les greffons installes : "page" dans un
+        environnement, "page_number" dans un autre, pour des versions
+        annoncees identiques. Le numero retenu doit venir de l'argument
+        `pages` transmis a l'appel, jamais des metadonnees renvoyees.
+        """
+        import src.ingestion.parsers as parsers_module
+
+        def to_markdown_sans_aucune_clef_de_page(file_path, pages=None, page_chunks=False, **kwargs):
+            return [
+                {"text": f"page {p}\n", "metadata": {"title": "", "author": ""}}
+                for p in (pages or [])
+            ]
+
+        monkeypatch.setattr(
+            parsers_module.pymupdf4llm, "to_markdown", to_markdown_sans_aucune_clef_de_page
+        )
+
+        parser = parsers_module.PDFParser(enable_ocr=False)
+        result = parser.parse(str(pdf_multi_pages))
+        page_spans = result["metadata"]["page_spans"]
+
+        assert [p for _, _, p in page_spans] == [1, 2, 3]
+
+
+class TestPositionApresRecouvrement:
+    """
+    Second trou de couverture du corpus reel : sur un tome de 54 pages,
+    117 fragments sur 132 ressortaient sans page.
+
+    Apres fermeture d'un fragment, l'ancienne implementation cherchait la
+    queue de recouvrement dans `content` par `rfind`. Cette queue n'est
+    pas une unite du document : le fragment accumule colle les unites
+    avec un espace simple la ou le document porte un saut de ligne. Des
+    que la queue traversait une jonction, la recherche echouait, et
+    l'echec ne se rattrapait jamais parce que la condition de reprise
+    exigeait un fragment courant vide, alors qu'il contenait justement
+    cette queue.
+
+    Les tests precedents utilisaient des textes trop courts pour produire
+    la sequence de fragments necessaire a l'apparition du defaut.
+    """
+
+    @staticmethod
+    def _contenu_multi_lignes(nb_phrases: int = 60) -> str:
+        # Separateurs varies (saut de ligne simple, double, espaces
+        # multiples) : c'est precisement ce que l'espace de jonction
+        # synthetique du fragment accumule ne reproduit pas.
+        separateurs = ["\n", "\n\n", "   ", " \n "]
+        morceaux = []
+        for i in range(nb_phrases):
+            morceaux.append(
+                f"Phrase numero {i} du document de test, suffisamment longue "
+                f"pour que plusieurs d entre elles remplissent un fragment."
+            )
+            morceaux.append(separateurs[i % len(separateurs)])
+        return "".join(morceaux)
+
+    def test_aucune_perte_de_position_apres_recouvrement(self) -> None:
+        content = self._contenu_multi_lignes()
+        chunker = Chunker(chunk_size=400, chunk_overlap=80, strategy="sentence")
+        chunks = chunker.chunk(document_pour_chunker(content, {}))
+
+        assert len(chunks) > 5, "le contenu doit produire assez de fragments"
+        sans_position = [c for c in chunks if c.start_char == -1]
+        assert not sans_position, (
+            f"{len(sans_position)}/{len(chunks)} fragments sans position : "
+            "la position se perd apres le recouvrement"
+        )
+
+    def test_positions_strictement_croissantes(self) -> None:
+        content = self._contenu_multi_lignes()
+        chunker = Chunker(chunk_size=400, chunk_overlap=80, strategy="sentence")
+        chunks = chunker.chunk(document_pour_chunker(content, {}))
+
+        debuts = [c.start_char for c in chunks]
+        assert debuts == sorted(debuts), "les fragments doivent avancer dans le document"
+        for c in chunks:
+            assert 0 <= c.start_char < c.end_char <= len(content)
+
+    def test_pages_renseignees_sur_tout_le_document(self) -> None:
+        """Avec une table de pagination, tous les fragments doivent porter
+        une page, pas seulement les premiers."""
+        content = self._contenu_multi_lignes()
+        # Trois pages de tailles egales couvrant tout le contenu.
+        tiers = len(content) // 3
+        page_spans = [
+            (0, tiers, 1),
+            (tiers, 2 * tiers, 2),
+            (2 * tiers, len(content), 3),
+        ]
+        chunker = Chunker(chunk_size=400, chunk_overlap=80, strategy="sentence")
+        chunks = chunker.chunk(
+            document_pour_chunker(content, {"page_spans": page_spans})
+        )
+
+        sans_page = [c for c in chunks if c.metadata.get("page_start") is None]
+        assert not sans_page, (
+            f"{len(sans_page)}/{len(chunks)} fragments sans page"
+        )
+        # Les pages progressent avec le document et restent dans les bornes.
+        pages = [c.metadata["page_start"] for c in chunks]
+        assert pages == sorted(pages)
+        assert min(pages) == 1
+        assert max(pages) == 3
+
+    def test_recouvrement_nul_reste_correct(self) -> None:
+        """Sans recouvrement, le comportement anterieur doit etre preserve."""
+        content = self._contenu_multi_lignes()
+        chunker = Chunker(chunk_size=400, chunk_overlap=0, strategy="sentence")
+        chunks = chunker.chunk(document_pour_chunker(content, {}))
+
+        assert chunks
+        assert all(c.start_char >= 0 for c in chunks)
