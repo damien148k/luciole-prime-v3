@@ -27,6 +27,22 @@ class ToolError(Exception):
     pass
 
 
+# Clefs de metadonnees conservees dans les resultats resumes transmis au
+# planificateur. Tout ce qui n'est pas ici disparait avant l'orchestrateur.
+#
+# page_start et page_end y figurent depuis la correction de #24 : le
+# drapeau `agent.observation_pages` demasquait ces clefs dans
+# `_format_metadata`, mais elles etaient deja supprimees ici. Le drapeau
+# etait donc sans effet, et l'affichage reste bien commande par lui,
+# `OBSERVATION_METADATA_MASQUEES` les retirant quand il est inactif.
+METADATA_RESUMEES = (
+    "client", "editor", "technology", "product", "version",
+    "support_type", "severity", "ticket_id", "projet",
+    "phase", "thematique", "departement",
+    "page_start", "page_end",
+)
+
+
 class ToolRegistry:
     """
     Registre des tools disponibles pour la boucle agentique.
@@ -421,11 +437,7 @@ class ToolRegistry:
                 "excerpt": text[:max_chars] + ("..." if len(text) > max_chars else ""),
                 "metadata": {
                     k: v for k, v in (r.get("metadata") or {}).items()
-                    if k in (
-                        "client", "editor", "technology", "product", "version",
-                        "support_type", "severity", "ticket_id", "projet",
-                        "phase", "thematique", "departement",
-                    )
+                    if k in METADATA_RESUMEES
                 },
             })
         return summarized
