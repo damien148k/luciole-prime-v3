@@ -525,6 +525,36 @@ def _log_agent_run(profile_name: str, index_name: str, question: str, result: di
 # API Endpoints
 # ============================================================================
 
+def _reporter_pages(passage: dict, meta: dict) -> None:
+    """Reporte les numeros de page des metadonnees vers le passage expose.
+
+    Les fragments PDF portent `page_start` et `page_end` depuis la PR #23,
+    poses par le chunker a partir de la table de pagination du parser. La
+    projection ne recopiait que `page`, une clef heritee que les PDF ne
+    produisent pas : les numeros restaient dans Qdrant sans jamais
+    remonter jusqu'a l'appelant. Mesure sur les vingt cas du jeu MRAe
+    avant correction : 0 passage renseigne sur 292.
+
+    `page` reste recopiee telle quelle pour les formats qui la posent, et
+    est deduite de `page_start` sinon, afin que les affichages existants
+    continuent de fonctionner sans changement.
+    """
+    debut = meta.get("page_start")
+    fin = meta.get("page_end")
+
+    if debut is not None:
+        passage["page_start"] = debut
+    if fin is not None:
+        passage["page_end"] = fin
+
+    if meta.get("page"):
+        passage["page"] = meta["page"]
+    elif debut is not None:
+        # Un fragment qui chevauche deux pages est annonce par sa premiere :
+        # c'est la page ou commence le texte cite.
+        passage["page"] = debut
+
+
 @app.get("/")
 async def root():
     """Health check"""
@@ -900,8 +930,7 @@ async def agent_run(request: AgentRunRequest):
                 "score": round(chunk.get("rrf_score", chunk.get("score", 0)) or 0, 4),
             }
             meta = chunk.get("metadata", {}) or {}
-            if meta.get("page"):
-                p["page"] = meta["page"]
+            _reporter_pages(p, meta)
             if meta.get("section"):
                 p["section"] = meta["section"]
             passages.append(p)
@@ -1256,9 +1285,8 @@ async def simple_query(request: QueryRequest):
                 "file_name": chunk.get("file_name", ""),
                 "score": round(chunk.get("rrf_score", chunk.get("score", 0)), 4),
             }
-            meta = chunk.get("metadata", {})
-            if meta.get("page"):
-                p["page"] = meta["page"]
+            meta = chunk.get("metadata", {}) or {}
+            _reporter_pages(p, meta)
             if meta.get("section"):
                 p["section"] = meta["section"]
             passages.append(p)

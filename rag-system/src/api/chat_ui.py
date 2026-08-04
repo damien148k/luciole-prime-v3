@@ -1565,7 +1565,10 @@ function fillSidebar(sources,passages){
       const num=i+1;
       const fileName=p.file_name||'Document';
       const meta=[];
-      if(p.page) meta.push('p.'+p.page);
+      // Un fragment peut chevaucher plusieurs pages : on affiche la
+      // plage quand page_end differe de page_start.
+      if(p.page_start&&p.page_end&&p.page_end!==p.page_start) meta.push('p.'+p.page_start+'-'+p.page_end);
+      else if(p.page) meta.push('p.'+p.page);
       if(p.section) meta.push(p.section);
       const score=p.score?p.score.toFixed(2):'';
       const text=(p.text||'').substring(0,800);
