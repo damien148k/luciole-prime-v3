@@ -119,6 +119,11 @@ JOB_SOURCE_RESCAN: str = "rescan"
 JOB_SOURCE_MANUAL: str = "manual"
 JOB_SOURCE_STARTUP: str = "startup"
 
+# Nombre de verrous SQLite consécutifs subis par le worker avant de passer le
+# journal en WARNING et de signaler le service comme dégradé. Un worker vivant
+# qui n'écrit plus doit être visible de l'extérieur.
+LOCK_ERRORS_WARN_THRESHOLD: int = 5
+
 DELETION_REASON_FILE_REMOVED: str = "file_removed"
 DELETION_REASON_MANUAL: str = "manual"
 DELETION_REASON_RECONCILE: str = "reconcile"

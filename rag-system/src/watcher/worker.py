@@ -140,8 +140,18 @@ class IndexWorker:
 
     @property
     def is_running(self) -> bool:
-        """Indique si le worker est actif."""
+        """Indique si le worker est actif.
+
+        Attention : un thread vivant ne garantit pas que le worker progresse.
+        Voir `lock_errors` pour détecter une boucle qui tourne à vide sur une
+        base verrouillée.
+        """
         return bool(self._thread and self._thread.is_alive())
+
+    @property
+    def lock_errors(self) -> int:
+        """Verrous SQLite subis d'affilée par la boucle de dépilement."""
+        return self._queue.consecutive_lock_errors if self._queue else 0
 
     # ─────────────────────────────────────────────────────────────────────
     # Boucle principale

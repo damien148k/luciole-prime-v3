@@ -5,6 +5,15 @@ Implémentée sur SQLite (table `jobs`). Les opérations critiques utilisent
 des transactions BEGIN IMMEDIATE pour garantir qu'un seul worker traite
 un job à la fois, même en cas d'accès concurrent.
 
+Concurrence intra-processus : une instance de JobQueue détient une seule
+connexion SQLite, et cette connexion peut être appelée depuis plusieurs fils
+(l'observer déclenche un `threading.Timer` par fichier après debounce). Une
+connexion SQLite ne supporte pas deux transactions simultanées : tous les
+accès sont donc sérialisés par un verrou d'instance, et toute transaction
+interrompue est explicitement annulée. Sans cela, un commit en échec laisse
+la transaction d'écriture ouverte et verrouille la base pour tous les autres
+composants jusqu'au redémarrage du processus.
+
 Stratégie de retry :
 - Backoff exponentiel : délai = base * (multiplier ** attempt)
 - Après max_attempts : le job passe en statut 'dead' (dead-letter)
@@ -14,13 +23,16 @@ Stratégie de retry :
 from __future__ import annotations
 
 import sqlite3
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Iterator, Optional
 
 from loguru import logger
 
 from .constants import (
+    LOCK_ERRORS_WARN_THRESHOLD,
     JOB_STATUS_COMPLETED,
     JOB_STATUS_DEAD,
     JOB_STATUS_FAILED,
@@ -39,7 +51,9 @@ class JobQueue:
     """
     File d'attente persistante basée sur SQLite.
 
-    Chaque instance maintient sa propre connexion — une instance par thread.
+    Chaque instance maintient sa propre connexion. Cette connexion est
+    protégée par un verrou d'instance : plusieurs fils peuvent partager la
+    même JobQueue sans corrompre les transactions.
     """
 
     def __init__(
@@ -56,9 +70,48 @@ class JobQueue:
         """
         self._db_path = db_path
         self._conn: sqlite3.Connection = get_connection(db_path)
+        self._lock = threading.RLock()
+        self._consecutive_lock_errors = 0
         self._retry_max_attempts = retry_max_attempts
         self._retry_backoff_base = retry_backoff_base
         logger.debug(f"JobQueue connectée : {db_path}")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Accès sérialisé à la connexion
+    # ─────────────────────────────────────────────────────────────────────
+
+    @property
+    def consecutive_lock_errors(self) -> int:
+        """Nombre de verrous SQLite subis d'affilée, remis à zéro au succès.
+
+        Exposé dans `GET /api/watcher/status` : un worker vivant qui n'écrit
+        plus doit être visible de l'extérieur, pas seulement dans les logs.
+        """
+        return self._consecutive_lock_errors
+
+    def _rollback_silencieux(self) -> None:
+        """Annule la transaction en cours sans masquer l'erreur d'origine."""
+        try:
+            self._conn.rollback()
+        except Exception as exc:  # pragma: no cover — défensif
+            logger.error(f"JobQueue : rollback impossible ({exc})")
+
+    @contextmanager
+    def _write(self) -> Iterator[sqlite3.Connection]:
+        """Transaction d'écriture sérialisée, annulée en cas d'échec."""
+        with self._lock:
+            try:
+                yield self._conn
+                self._conn.commit()
+            except BaseException:
+                self._rollback_silencieux()
+                raise
+
+    @contextmanager
+    def _read(self) -> Iterator[sqlite3.Connection]:
+        """Lecture sérialisée : empêche un curseur ouvert pendant un commit."""
+        with self._lock:
+            yield self._conn
 
     # ─────────────────────────────────────────────────────────────────────
     # Enqueue
@@ -91,14 +144,18 @@ class JobQueue:
         job_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
 
-        # Annuler les jobs pending existants pour ce même path + action
-        # (le nouveau remplace — debounce au niveau de la queue)
-        cancelled = self.cancel_pending_for_path(file_path, action)
-        if cancelled:
-            logger.debug(f"Debounce queue : {cancelled} job(s) annulé(s) pour {file_path}")
+        # Annulation des pending + insertion dans une seule transaction :
+        # deux commits successifs laisseraient une fenêtre où le chemin n'a
+        # plus aucun job en file.
+        with self._write() as conn:
+            cancelled = self._cancel_pending_for_path_locked(conn, file_path, action)
+            if cancelled:
+                logger.debug(
+                    f"Debounce queue : {cancelled} job(s) annulé(s) pour {file_path}"
+                )
 
-        self._conn.execute(
-            """
+            conn.execute(
+                """
             INSERT INTO jobs (
                 job_id, file_path, action, old_path,
                 status, priority, source,
@@ -111,18 +168,18 @@ class JobQueue:
                 :now
             )
             """,
-            {
-                "job_id": job_id,
-                "file_path": file_path,
-                "action": action,
-                "old_path": old_path,
-                "priority": priority,
-                "source": source,
-                "max_attempts": self._retry_max_attempts,
-                "now": now,
-            },
-        )
-        self._conn.commit()
+                {
+                    "job_id": job_id,
+                    "file_path": file_path,
+                    "action": action,
+                    "old_path": old_path,
+                    "priority": priority,
+                    "source": source,
+                    "max_attempts": self._retry_max_attempts,
+                    "now": now,
+                },
+            )
+
         logger.debug(f"Job enqueued : {job_id} | {action} | {file_path}")
         return job_id
 
@@ -144,10 +201,11 @@ class JobQueue:
         """
         now = datetime.utcnow().isoformat()
 
-        try:
-            with self._conn:
+        with self._lock:
+            try:
                 self._conn.execute("BEGIN IMMEDIATE")
-                row = self._conn.execute(
+
+                cursor = self._conn.execute(
                     """
                     SELECT * FROM jobs
                     WHERE status = 'pending'
@@ -156,11 +214,19 @@ class JobQueue:
                     LIMIT 1
                     """,
                     {"now": now},
-                ).fetchone()
+                )
+                # fetchall() épuise le curseur : un SELECT encore en cours au
+                # moment du COMMIT le fait échouer avec « SQL statements in
+                # progress », ce qui laisse la transaction ouverte.
+                rows = cursor.fetchall()
+                cursor.close()
 
-                if row is None:
+                if not rows:
+                    self._conn.commit()
+                    self._consecutive_lock_errors = 0
                     return None
 
+                row = rows[0]
                 self._conn.execute(
                     """
                     UPDATE jobs
@@ -171,15 +237,30 @@ class JobQueue:
                     """,
                     {"job_id": row["job_id"], "now": now},
                 )
+                self._conn.commit()
 
+            except sqlite3.OperationalError as exc:
+                self._rollback_silencieux()
+                self._consecutive_lock_errors += 1
+                message = (
+                    f"dequeue : base verrouillée ({exc}) — "
+                    f"{self._consecutive_lock_errors} échec(s) consécutif(s)"
+                )
+                if self._consecutive_lock_errors >= LOCK_ERRORS_WARN_THRESHOLD:
+                    logger.warning(message)
+                else:
+                    logger.debug(message)
+                return None
+
+            except BaseException:
+                self._rollback_silencieux()
+                raise
+
+            self._consecutive_lock_errors = 0
             job = _row_to_job(row)
             # Le statut dans la row est celui d'avant l'UPDATE — on le corrige
             job.status = JOB_STATUS_IN_PROGRESS
             return job
-
-        except sqlite3.OperationalError as exc:
-            logger.debug(f"dequeue : base verrouillée ({exc})")
-            return None
 
     # ─────────────────────────────────────────────────────────────────────
     # Finalisation
@@ -193,16 +274,16 @@ class JobQueue:
             job_id: Identifiant du job.
         """
         now = datetime.utcnow().isoformat()
-        self._conn.execute(
-            """
-            UPDATE jobs
-            SET status = 'completed',
-                completed_at = :now
-            WHERE job_id = :job_id
-            """,
-            {"job_id": job_id, "now": now},
-        )
-        self._conn.commit()
+        with self._write() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'completed',
+                    completed_at = :now
+                WHERE job_id = :job_id
+                """,
+                {"job_id": job_id, "now": now},
+            )
         logger.debug(f"Job completed : {job_id}")
 
     def fail(self, job_id: str, error: str) -> None:
@@ -215,10 +296,11 @@ class JobQueue:
             job_id: Identifiant du job.
             error: Message d'erreur à persister.
         """
-        row = self._conn.execute(
-            "SELECT attempts, max_attempts FROM jobs WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()
+        with self._read() as conn:
+            row = conn.execute(
+                "SELECT attempts, max_attempts FROM jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
 
         if row is None:
             logger.warning(f"fail() : job introuvable : {job_id}")
@@ -238,17 +320,17 @@ class JobQueue:
         )
         next_retry = (datetime.utcnow() + timedelta(seconds=delay)).isoformat()
 
-        self._conn.execute(
-            """
-            UPDATE jobs
-            SET status = 'failed',
-                error_message = :error,
-                next_retry_at = :next_retry
-            WHERE job_id = :job_id
-            """,
-            {"job_id": job_id, "error": error, "next_retry": next_retry},
-        )
-        self._conn.commit()
+        with self._write() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'failed',
+                    error_message = :error,
+                    next_retry_at = :next_retry
+                WHERE job_id = :job_id
+                """,
+                {"job_id": job_id, "error": error, "next_retry": next_retry},
+            )
         logger.warning(
             f"Job failed : {job_id} | tentative {attempts}/{max_attempts} "
             f"| prochaine tentative dans {delay:.0f}s"
@@ -264,11 +346,11 @@ class JobQueue:
         Args:
             job_id: Identifiant du job.
         """
-        self._conn.execute(
-            "UPDATE jobs SET status = 'dead' WHERE job_id = ?",
-            (job_id,),
-        )
-        self._conn.commit()
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE jobs SET status = 'dead' WHERE job_id = ?",
+                (job_id,),
+            )
         logger.error(f"Job dead-lettered : {job_id}")
 
     # ─────────────────────────────────────────────────────────────────────
@@ -277,9 +359,10 @@ class JobQueue:
 
     def get_pending_count(self) -> int:
         """Retourne le nombre de jobs en attente de traitement."""
-        row = self._conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE status IN ('pending', 'failed')",
-        ).fetchone()
+        with self._read() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status IN ('pending', 'failed')",
+            ).fetchone()
         return row[0] if row else 0
 
     def get_failed_jobs(self, limit: int = 50) -> list[Job]:
@@ -292,15 +375,16 @@ class JobQueue:
         Returns:
             Liste de Job.
         """
-        rows = self._conn.execute(
-            """
-            SELECT * FROM jobs
-            WHERE status IN ('failed', 'dead')
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        with self._read() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM jobs
+                WHERE status IN ('failed', 'dead')
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
         return [_row_to_job(r) for r in rows]
 
     def get_job(self, job_id: str) -> Optional[Job]:
@@ -313,10 +397,11 @@ class JobQueue:
         Returns:
             Job ou None.
         """
-        row = self._conn.execute(
-            "SELECT * FROM jobs WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()
+        with self._read() as conn:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
         return _row_to_job(row) if row else None
 
     def list_jobs(
@@ -336,26 +421,28 @@ class JobQueue:
         Returns:
             Liste de Job.
         """
-        if status:
-            rows = self._conn.execute(
-                """
-                SELECT * FROM jobs WHERE status = ?
-                ORDER BY created_at DESC LIMIT ? OFFSET ?
-                """,
-                (status, limit, offset),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
+        with self._read() as conn:
+            if status:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM jobs WHERE status = ?
+                    ORDER BY created_at DESC LIMIT ? OFFSET ?
+                    """,
+                    (status, limit, offset),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                ).fetchall()
         return [_row_to_job(r) for r in rows]
 
     def get_counts_by_status(self) -> dict[str, int]:
         """Retourne le nombre de jobs par statut."""
-        rows = self._conn.execute(
-            "SELECT status, COUNT(*) as cnt FROM jobs GROUP BY status",
-        ).fetchall()
+        with self._read() as conn:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) as cnt FROM jobs GROUP BY status",
+            ).fetchall()
         return {row["status"]: row["cnt"] for row in rows}
 
     # ─────────────────────────────────────────────────────────────────────
@@ -371,17 +458,17 @@ class JobQueue:
         Args:
             job_id: UUID du job à relancer.
         """
-        self._conn.execute(
-            """
-            UPDATE jobs
-            SET status = 'pending',
-                next_retry_at = NULL,
-                error_message = NULL
-            WHERE job_id = ?
-            """,
-            (job_id,),
-        )
-        self._conn.commit()
+        with self._write() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'pending',
+                    next_retry_at = NULL,
+                    error_message = NULL
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            )
         logger.info(f"Job relancé manuellement : {job_id}")
 
     def retry_all_failed(self) -> int:
@@ -391,17 +478,17 @@ class JobQueue:
         Returns:
             Nombre de jobs relancés.
         """
-        cursor = self._conn.execute(
-            """
-            UPDATE jobs
-            SET status = 'pending',
-                next_retry_at = NULL,
-                error_message = NULL
-            WHERE status IN ('failed', 'dead')
-            """
-        )
-        self._conn.commit()
-        count = cursor.rowcount
+        with self._write() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'pending',
+                    next_retry_at = NULL,
+                    error_message = NULL
+                WHERE status IN ('failed', 'dead')
+                """
+            )
+            count = cursor.rowcount
         if count:
             logger.info(f"{count} job(s) en erreur relancés")
         return count
@@ -423,8 +510,22 @@ class JobQueue:
         Returns:
             Nombre de jobs annulés.
         """
+        with self._write() as conn:
+            return self._cancel_pending_for_path_locked(conn, file_path, action)
+
+    def _cancel_pending_for_path_locked(
+        self,
+        conn: sqlite3.Connection,
+        file_path: str,
+        action: Optional[str] = None,
+    ) -> int:
+        """Corps de `cancel_pending_for_path`, sans transaction propre.
+
+        Appelé depuis `enqueue` pour que l'annulation et l'insertion tiennent
+        dans une seule transaction.
+        """
         if action:
-            cursor = self._conn.execute(
+            cursor = conn.execute(
                 """
                 DELETE FROM jobs
                 WHERE file_path = ? AND action = ? AND status = 'pending'
@@ -432,11 +533,10 @@ class JobQueue:
                 (file_path, action),
             )
         else:
-            cursor = self._conn.execute(
+            cursor = conn.execute(
                 "DELETE FROM jobs WHERE file_path = ? AND status = 'pending'",
                 (file_path,),
             )
-        self._conn.commit()
         return cursor.rowcount
 
     def recover_in_progress(self) -> int:
@@ -447,26 +547,27 @@ class JobQueue:
         Returns:
             Nombre de jobs récupérés.
         """
-        cursor = self._conn.execute(
-            """
-            UPDATE jobs
-            SET status = 'pending',
-                started_at = NULL
-            WHERE status = 'in_progress'
-            """
-        )
-        self._conn.commit()
-        count = cursor.rowcount
+        with self._write() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'pending',
+                    started_at = NULL
+                WHERE status = 'in_progress'
+                """
+            )
+            count = cursor.rowcount
         if count:
             logger.info(f"Reprise après crash : {count} job(s) 'in_progress' remis en 'pending'")
         return count
 
     def close(self) -> None:
         """Ferme la connexion SQLite."""
-        try:
-            self._conn.close()
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
