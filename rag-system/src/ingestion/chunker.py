@@ -9,10 +9,11 @@ Stratégies spéciales :
   - MSG/EML : métadonnées (De, À, Objet, Date) incluses dans chaque chunk
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from loguru import logger
 from pathlib import Path
+import bisect
 import re
 import yaml
 
@@ -183,8 +184,55 @@ class Chunker:
 
         return "[" + " | ".join(context_parts) + "]"
 
+    @staticmethod
+    def _pages_couvertes(page_spans: Optional[List[Tuple[int, int, int]]], start_char: int, end_char: int) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Determine les numeros de page couvrant l'intervalle [start_char, end_char).
+
+        `page_spans` est une liste ordonnee de tuples (debut, fin, page),
+        triee par `debut` croissant (construite ainsi par les parsers). On
+        utilise `bisect` sur la liste des bornes de debut pour localiser en
+        O(log n) les spans qui recouvrent l'intervalle, plutot qu'un
+        balayage lineaire.
+
+        Retourne (page_start, page_end), chacun None si aucune page n'a pu
+        etre etablie (page_spans absente/vide, ou position -1 signifiant
+        une position non retrouvee par le chunker).
+        """
+        if not page_spans or start_char < 0 or end_char < 0 or end_char <= start_char:
+            return None, None
+
+        debuts = [span[0] for span in page_spans]
+
+        # Page couvrant le premier caractere du fragment : dernier span dont
+        # le debut est <= start_char.
+        idx_debut = bisect.bisect_right(debuts, start_char) - 1
+        # Page couvrant le dernier caractere du fragment (end_char exclu) :
+        # dernier span dont le debut est <= end_char - 1.
+        idx_fin = bisect.bisect_right(debuts, end_char - 1) - 1
+
+        if idx_debut < 0 or idx_fin < 0:
+            return None, None
+
+        page_start = page_spans[idx_debut][2]
+        page_end = page_spans[idx_fin][2]
+        return page_start, page_end
+
     def _make_chunk(self, text: str, file_context: str, doc_id: str, file_path: str, file_name: str, metadata: Dict, chunk_idx: int, start_char: int, end_char: int) -> Chunk:
         text_with_context = f"{file_context}\n{text}" if self.include_file_context else text
+
+        # page_spans decrit la pagination du document entier (table), pas du
+        # fragment : on la lit ici pour calculer page_start/page_end puis on
+        # la retire explicitement des metadonnees du fragment pour ne pas la
+        # dupliquer dans chaque chunk.
+        page_spans = metadata.get("page_spans")
+        page_start, page_end = self._pages_couvertes(page_spans, start_char, end_char)
+
+        chunk_metadata = {k: v for k, v in metadata.items() if k != "page_spans"}
+        chunk_metadata["chunk_index"] = chunk_idx
+        chunk_metadata["page_start"] = page_start
+        chunk_metadata["page_end"] = page_end
+
         return Chunk(
             text=text,
             text_with_context=text_with_context,
@@ -194,7 +242,7 @@ class Chunker:
             file_name=file_name,
             start_char=start_char,
             end_char=end_char,
-            metadata={**metadata, "chunk_index": chunk_idx}
+            metadata=chunk_metadata
         )
 
     # =========================================================================
@@ -287,6 +335,41 @@ class Chunker:
 
         return texte[debut + avance.end():]
 
+    def _localiser_unites(self, content: str, unites: List[str]) -> List[Tuple[str, int]]:
+        """
+        Retrouve la position reelle de chaque unite dans `content`.
+
+        Les unites (phrases ou paragraphes) sont des sous-chaines de
+        `content` : le motif de decoupe ne consomme que des blancs et
+        `_split_oversized` decoupe et strip une sous-chaine. Une recherche
+        incrementale `content.find(unite, curseur)` retrouve donc la
+        position reelle de chaque unite en avancant le curseur.
+
+        `_split_oversized` produit des morceaux qui se chevauchent dans
+        `content` (le recouvrement demande fait qu'un morceau commence
+        avant la fin du precedent) : le curseur n'avance donc qu'au debut
+        de l'unite trouvee (+1), jamais jusqu'a sa fin, pour ne pas rendre
+        introuvable un morceau suivant chevauchant. Les debuts de morceaux
+        successifs sont toujours strictement croissants par construction
+        de `_split_oversized`, donc cette avance minimale suffit a garantir
+        la progression sans confondre deux occurrences identiques.
+
+        Si la recherche echoue (retour -1), la position vaut -1 : les
+        fragments concernes seront alors marques sans page plutot que de
+        recevoir une position devinee.
+
+        Retourne une liste de tuples (unite, position) dans le meme ordre
+        que `unites`.
+        """
+        localisees = []
+        curseur = 0
+        for unite in unites:
+            pos = content.find(unite, curseur)
+            if pos != -1:
+                curseur = pos + 1
+            localisees.append((unite, pos))
+        return localisees
+
     def _chunk_by_sentence(self, content, doc_id, file_path, file_name, file_context, metadata, resolved):
         cs = resolved.get("chunk_size", self.chunk_size)
         co = resolved.get("chunk_overlap", self.chunk_overlap)
@@ -294,8 +377,14 @@ class Chunker:
         sentences = self.sentence_pattern.split(content)
         chunks = []
         current_chunk = ""
-        start_char = 0
         chunk_idx = 0
+        # Position reelle du debut du chunk courant dans `content`. None si
+        # elle n'a pas pu etre etablie (unite introuvable) : le chunk sera
+        # alors marque sans position plutot que de deviner.
+        chunk_start_reel: Optional[int] = None
+        # Fin reelle du contenu deja accumule dans current_chunk (avant
+        # d'ajouter l'espace de separation final).
+        fin_reelle: Optional[int] = None
 
         unites = []
         surdimensionnees = 0
@@ -318,20 +407,49 @@ class Chunker:
                 f"{cs} caracteres ont ete redecoupees (tableaux, sommaires ou listes)."
             )
 
-        for sentence in unites:
+        localisees = self._localiser_unites(content, unites)
+
+        for sentence, pos_reelle in localisees:
             if len(current_chunk) + len(sentence) > cs and current_chunk:
                 text = current_chunk.strip()
-                chunks.append(self._make_chunk(text, file_context, doc_id, file_path, file_name, metadata, chunk_idx, start_char, start_char + len(current_chunk)))
+                chunks.append(self._make_chunk(
+                    text, file_context, doc_id, file_path, file_name, metadata, chunk_idx,
+                    chunk_start_reel if chunk_start_reel is not None else -1,
+                    fin_reelle if fin_reelle is not None else -1,
+                ))
                 chunk_idx += 1
                 overlap_text = self._queue_recouvrement(current_chunk, co)
-                start_char = start_char + len(current_chunk) - len(overlap_text)
+                overlap_strip = overlap_text.strip()
+                if overlap_strip and fin_reelle is not None and chunk_start_reel is not None:
+                    # La queue de recouvrement peut porter un espace de
+                    # jonction synthetique ("sentence + ' '") en bord, qui ne
+                    # correspond pas forcement au separateur reel dans
+                    # content (saut de ligne, espaces multiples...). On
+                    # localise donc sa version strippee, sous-chaine sure de
+                    # l'unite d'origine, en cherchant a rebours dans la zone
+                    # du chunk qui vient d'etre ferme pour limiter le risque
+                    # de collision avec une occurrence similaire ailleurs.
+                    pos_overlap = content.rfind(overlap_strip, chunk_start_reel, fin_reelle + 1)
+                    chunk_start_reel = pos_overlap if pos_overlap != -1 else None
+                    fin_reelle = (pos_overlap + len(overlap_strip)) if pos_overlap != -1 else None
+                else:
+                    chunk_start_reel = None
+                    fin_reelle = None
                 current_chunk = overlap_text
 
+            if not current_chunk and pos_reelle != -1:
+                chunk_start_reel = pos_reelle
+
             current_chunk += sentence + " "
+            fin_reelle = (pos_reelle + len(sentence)) if pos_reelle != -1 else None
 
         if current_chunk.strip():
             text = current_chunk.strip()
-            chunks.append(self._make_chunk(text, file_context, doc_id, file_path, file_name, metadata, chunk_idx, start_char, start_char + len(current_chunk)))
+            chunks.append(self._make_chunk(
+                text, file_context, doc_id, file_path, file_name, metadata, chunk_idx,
+                chunk_start_reel if chunk_start_reel is not None else -1,
+                fin_reelle if fin_reelle is not None else -1,
+            ))
 
         logger.info(f"Created {len(chunks)} chunks for document: {doc_id} (sentence)")
         return chunks
@@ -347,8 +465,13 @@ class Chunker:
         paragraphs = content.split("\n\n")
         chunks = []
         current_chunk = ""
-        start_char = 0
         chunk_idx = 0
+        # Position reelle du debut du chunk courant dans `content`, et fin
+        # reelle du contenu deja accumule (avant le "\n\n" de jonction).
+        # None si non etablie : le chunk sera marque sans page plutot que
+        # de deviner une position.
+        chunk_start_reel: Optional[int] = None
+        fin_reelle: Optional[int] = None
 
         unites = []
         surdimensionnes = 0
@@ -368,19 +491,34 @@ class Chunker:
                 f"caracteres ont ete redecoupes."
             )
 
-        for para in unites:
+        localisees = self._localiser_unites(content, unites)
+
+        for para, pos_reelle in localisees:
             if len(current_chunk) + len(para) > cs and current_chunk:
                 text = current_chunk.strip()
-                chunks.append(self._make_chunk(text, file_context, doc_id, file_path, file_name, metadata, chunk_idx, start_char, start_char + len(current_chunk)))
+                chunks.append(self._make_chunk(
+                    text, file_context, doc_id, file_path, file_name, metadata, chunk_idx,
+                    chunk_start_reel if chunk_start_reel is not None else -1,
+                    fin_reelle if fin_reelle is not None else -1,
+                ))
                 chunk_idx += 1
-                start_char = start_char + len(current_chunk)
+                chunk_start_reel = None
+                fin_reelle = None
                 current_chunk = ""
 
+            if not current_chunk and pos_reelle != -1:
+                chunk_start_reel = pos_reelle
+
             current_chunk += para + "\n\n"
+            fin_reelle = (pos_reelle + len(para)) if pos_reelle != -1 else None
 
         if current_chunk.strip():
             text = current_chunk.strip()
-            chunks.append(self._make_chunk(text, file_context, doc_id, file_path, file_name, metadata, chunk_idx, start_char, start_char + len(current_chunk)))
+            chunks.append(self._make_chunk(
+                text, file_context, doc_id, file_path, file_name, metadata, chunk_idx,
+                chunk_start_reel if chunk_start_reel is not None else -1,
+                fin_reelle if fin_reelle is not None else -1,
+            ))
 
         logger.info(f"Created {len(chunks)} chunks for document: {doc_id} (paragraph)")
         return chunks
