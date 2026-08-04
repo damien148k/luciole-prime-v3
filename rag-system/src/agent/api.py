@@ -797,7 +797,23 @@ def get_orchestrator(index_name: str = None):
         return cached["orchestrator"]
 
     from src.agent.tools import ToolRegistry
-    from src.agent.orchestrator import AgentOrchestrator
+    from src.agent.orchestrator import (
+        AgentOrchestrator,
+        configurer_pages_dans_observations,
+    )
+
+    # Affichage de page_start / page_end dans les metadonnees observees
+    # par le planificateur. Desactive par defaut : l'ajouter change ce que
+    # le modele lit a chaque etape et n'est donc pas neutre pour une
+    # campagne comparative. La variable d'environnement
+    # AGENT_OBSERVATION_PAGES a priorite sur settings.yaml (agent.observation_pages),
+    # meme convention que AGENT_USE_RERANKER.
+    _agent_cfg = _get_config().get("agent", {}) or {}
+    _observation_pages = _env_flag(
+        "AGENT_OBSERVATION_PAGES",
+        default=bool(_agent_cfg.get("observation_pages", False)),
+    )
+    configurer_pages_dans_observations(_observation_pages)
 
     # Reranking de l'agent : actif par defaut, desactivable pour une mesure
     # A/B (recall@k avec et sans reranking sur le meme index). La variable
