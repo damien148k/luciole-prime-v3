@@ -38,6 +38,7 @@ OBSERVATION_METADATA_MAX = 6
 # borne : il est affiche tel quel a l'utilisateur.
 FALLBACK_OBSERVATION_CHARS = 800
 OBSERVATION_METADATA_PRIORITY = (
+    "page_start", "page_end",
     "ticket_id", "product", "version", "technology", "support_type",
     "severity", "projet", "phase", "thematique", "departement",
     "editor", "client",

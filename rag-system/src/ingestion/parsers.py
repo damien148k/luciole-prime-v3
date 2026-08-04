@@ -9,7 +9,7 @@ import re
 import signal
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from loguru import logger
@@ -176,23 +176,41 @@ class PDFParser(BaseParser):
         
         return is_complex
     
-    def _extract_text_simple(self, doc) -> str:
+    def _extract_text_simple(self, doc) -> Tuple[str, List[Tuple[int, int, int]]]:
         """
         Extraction simple du texte avec PyMuPDF (rapide, sans mise en forme Markdown).
         Utilisé comme fallback pour les PDFs vectoriels complexes.
+
+        Retourne le texte concaténé ainsi que la table de pagination
+        (debut_char, fin_char, numero_page) associee, numero_page en base 1.
+        Le marqueur "--- Page N ---" n'est plus injecte dans le texte : la
+        table page_spans est desormais la seule source de verite pour la
+        pagination, afin de ne pas polluer les embeddings.
         """
         text_parts = []
+        page_spans: List[Tuple[int, int, int]] = []
+        offset = 0
         for page_num, page in enumerate(doc):
             text = page.get_text("text")
             if text.strip():
-                text_parts.append(f"--- Page {page_num + 1} ---\n{text}")
+                part = text if not text_parts else "\n\n" + text
+                text_parts.append(part)
+                page_spans.append((offset, offset + len(part), page_num + 1))
+                offset += len(part)
         
-        return "\n\n".join(text_parts)
+        return "".join(text_parts), page_spans
     
-    def _extract_markdown_pagewise(self, file_path: str, page_count: int, batch_size: int = 10) -> str:
+    def _extract_markdown_pagewise(self, file_path: str, page_count: int, batch_size: int = 10) -> Tuple[str, List[Tuple[int, int, int]]]:
         """
         Extrait le texte Markdown page par page (ou par batch) avec pymupdf4llm.
         Beaucoup plus robuste que l'extraction en une seule fois pour les gros PDF.
+
+        Utilise page_chunks=True pour connaitre la frontiere de chaque page et
+        construire, en plus du texte, la table de pagination page_spans :
+        une liste ordonnee de tuples (debut_char, fin_char, numero_page) ou
+        les offsets se rapportent au texte retourne et numero_page est en
+        base 1. Le texte concatene est identique a celui que produirait
+        to_markdown sans page_chunks (aucun marqueur de page injecte).
         
         Args:
             file_path: Chemin vers le PDF
@@ -200,16 +218,23 @@ class PDFParser(BaseParser):
             batch_size: Nombre de pages par batch (défaut: 10)
         """
         all_parts = []
+        page_spans: List[Tuple[int, int, int]] = []
+        offset = 0
         
         for start in range(0, page_count, batch_size):
             end = min(start + batch_size, page_count)
             pages = list(range(start, end))
             
             try:
-                md_text = pymupdf4llm.to_markdown(file_path, pages=pages)
-                if md_text and md_text.strip():
-                    all_parts.append(md_text)
-                logger.debug(f"pymupdf4llm pages {start+1}-{end}/{page_count} OK ({len(md_text)} chars)")
+                page_dicts = pymupdf4llm.to_markdown(file_path, pages=pages, page_chunks=True)
+                for page_dict in page_dicts:
+                    text = page_dict.get("text") or ""
+                    if text:
+                        all_parts.append(text)
+                        page_num = page_dict["metadata"]["page"]
+                        page_spans.append((offset, offset + len(text), page_num))
+                        offset += len(text)
+                logger.debug(f"pymupdf4llm pages {start+1}-{end}/{page_count} OK")
             except Exception as e:
                 logger.warning(f"pymupdf4llm échoué pages {start+1}-{end}: {e} - fallback extraction simple")
                 # Fallback page par page avec extraction simple pour ce batch
@@ -217,14 +242,16 @@ class PDFParser(BaseParser):
                 for p in pages:
                     text = doc[p].get_text("text")
                     if text.strip():
-                        all_parts.append(f"--- Page {p + 1} ---\n{text}")
+                        all_parts.append(text)
+                        page_spans.append((offset, offset + len(text), p + 1))
+                        offset += len(text)
                 doc.close()
             
             # Log de progression tous les 50 pages
             if end % 50 == 0 or end == page_count:
                 logger.info(f"Extraction pymupdf4llm: {end}/{page_count} pages traitées")
         
-        return "\n\n".join(all_parts)
+        return "".join(all_parts), page_spans
     
     def parse(self, file_path: str) -> Dict:
         logger.info(f"Parsing PDF: {file_path}")
@@ -252,14 +279,14 @@ class PDFParser(BaseParser):
             if is_complex:
                 # PDF vectoriel complexe: utiliser extraction simple (rapide)
                 logger.info("Utilisation de l'extraction simple pour PDF vectoriel complexe")
-                md_text = self._extract_text_simple(doc)
+                md_text, page_spans = self._extract_text_simple(doc)
                 extraction_method = "simple"
             else:
                 # PDF normal: extraction pymupdf4llm page par page (robuste pour gros PDFs)
                 doc.close()  # Fermer avant pymupdf4llm
                 
                 logger.info(f"Extraction pymupdf4llm page par page ({page_count} pages, batch=10)")
-                md_text = self._extract_markdown_pagewise(file_path, page_count, batch_size=10)
+                md_text, page_spans = self._extract_markdown_pagewise(file_path, page_count, batch_size=10)
                 
                 doc = pymupdf.open(file_path)  # Réouvrir pour OCR si nécessaire
             
@@ -275,7 +302,7 @@ class PDFParser(BaseParser):
                 
                 if pages_need_ocr:
                     ocr_text = self._apply_ocr(file_path, pages_need_ocr)
-                    md_text = self._merge_text_with_ocr(md_text or "", ocr_text, pages_need_ocr)
+                    md_text, page_spans = self._merge_text_with_ocr(md_text or "", ocr_text, pages_need_ocr, page_spans)
                     ocr_applied = True
                     ocr_pages_count = len([p for p in pages_need_ocr if ocr_text.get(p, "").strip()])
                     logger.info(f"OCR terminé: {ocr_pages_count} pages avec texte extrait")
@@ -298,7 +325,13 @@ class PDFParser(BaseParser):
                     "ocr_applied": ocr_applied,
                     "ocr_pages_count": ocr_pages_count,
                     "extraction_method": extraction_method,
-                    "is_complex_vector": is_complex
+                    "is_complex_vector": is_complex,
+                    # Table de pagination : liste ordonnee de tuples
+                    # (debut_char, fin_char, numero_page). Les offsets se
+                    # rapportent au "content" retourne ci-dessus ; numero_page
+                    # est en base 1. Absente (liste vide) si aucune page n'a
+                    # pu etre associee au texte, ce qui reste un cas normal.
+                    "page_spans": page_spans
                 }
             }
         except Exception as e:
@@ -347,21 +380,48 @@ class PDFParser(BaseParser):
                 ocr_results[page_num] = ""
         return ocr_results
     
-    def _merge_text_with_ocr(self, original_text: str, ocr_text: Dict[int, str], pages: List[int]) -> str:
-        """Fusionne le texte original avec le texte OCR"""
+    def _merge_text_with_ocr(
+        self,
+        original_text: str,
+        ocr_text: Dict[int, str],
+        pages: List[int],
+        page_spans: Optional[List[Tuple[int, int, int]]] = None,
+    ) -> Tuple[str, List[Tuple[int, int, int]]]:
+        """
+        Fusionne le texte original avec le texte OCR.
+
+        Les sections OCR sont ajoutees a la fin du texte original (elles ne
+        decalent donc pas les offsets deja calcules pour original_text) et
+        prolongent la table page_spans recue en argument avec leur propre
+        page, en base 1. La table est retournee plutot que recalculee par
+        l'appelant.
+        """
+        page_spans = list(page_spans) if page_spans else []
+
         if not ocr_text:
-            return original_text
+            return original_text, page_spans
         
         # Ajouter le texte OCR à la fin avec indication des pages
         ocr_sections = []
         for page_num in sorted(ocr_text.keys()):
             if ocr_text[page_num].strip():
-                ocr_sections.append(f"\n--- OCR Page {page_num + 1} ---\n{ocr_text[page_num]}")
-        
+                section = f"\n--- OCR Page {page_num + 1} ---\n{ocr_text[page_num]}"
+                ocr_sections.append(section)
+
         if ocr_sections:
-            return original_text + "\n\n" + "\n".join(ocr_sections)
+            merged = original_text + "\n\n" + "\n".join(ocr_sections)
+            # Reconstruit les spans OCR sur le texte fusionne final, dans
+            # le meme ordre que les sections ajoutees ci-dessus.
+            cursor = len(original_text) + len("\n\n")
+            for i, page_num in enumerate(sorted(ocr_text.keys())):
+                if not ocr_text[page_num].strip():
+                    continue
+                section = f"\n--- OCR Page {page_num + 1} ---\n{ocr_text[page_num]}"
+                page_spans.append((cursor, cursor + len(section), page_num + 1))
+                cursor += len(section) + len("\n")
+            return merged, page_spans
         
-        return original_text
+        return original_text, page_spans
 
 
 class DOCXParser(BaseParser):
