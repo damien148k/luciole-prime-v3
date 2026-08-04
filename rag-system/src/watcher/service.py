@@ -24,6 +24,7 @@ from loguru import logger
 
 from .cleanup import ChunkCleaner
 from .config import load_watcher_config
+from .constants import LOCK_ERRORS_WARN_THRESHOLD
 from .db import get_connection, init_db
 from .models import WatcherConfig
 from .observer import FileWatcher
@@ -191,8 +192,19 @@ class WatcherService:
         queue_counts = self._queue.get_counts_by_status() if self._queue else {}
         doc_counts = self._state.get_documents_count_by_status() if self._state else {}
 
+        # Un worker dont le thread est vivant mais qui ne parvient plus à
+        # écrire doit être visible ici, pas seulement dans les logs.
+        lock_errors = self._worker.lock_errors if self._worker else 0
+        degraded_reason = None
+        if lock_errors >= LOCK_ERRORS_WARN_THRESHOLD:
+            degraded_reason = (
+                f"worker bloqué : {lock_errors} verrous SQLite consécutifs"
+            )
+
         return {
             "running": self.is_running,
+            "degraded": degraded_reason is not None,
+            "degraded_reason": degraded_reason,
             "started_at": self._started_at,
             "uptime_seconds": uptime,
             "watched_paths": [
@@ -214,6 +226,7 @@ class WatcherService:
                 "failed": queue_counts.get("failed", 0),
                 "dead": queue_counts.get("dead", 0),
                 "completed": queue_counts.get("completed", 0),
+                "lock_errors": lock_errors,
             },
             "documents": {
                 "indexed": doc_counts.get("indexed", 0),
