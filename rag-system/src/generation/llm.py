@@ -194,20 +194,41 @@ class LLMGenerator:
             f"Voici des extraits de documents pertinents :\n\n{context}\n\n---\n\n"
             f"Question : {query}\n\n"
             "Réponds en t'appuyant exclusivement sur les extraits ci-dessus. "
+            "Quand tu t'appuies sur un extrait, cite le document et la page "
+            "indiqués dans son étiquette de source. "
             "Si l'information n'est pas présente, dis-le clairement."
         )
 
     def _extract_sources(self, search_results: list = None) -> list:
+        """Sources rendues à l'appelant, avec leur pagination.
+
+        Avant : dédoublonnage par fichier, et seuls le nom, le chemin et le
+        score étaient recopiés. La pagination présente dans
+        r["metadata"] était perdue, d'où des sources sans page dans toutes
+        les réponses de l'API.
+
+        Maintenant : dédoublonnage par fichier ET intervalle de pages, pour
+        que deux passages éloignés du même document ne comptent plus pour
+        un. La limite de dix entrées est conservée.
+        """
         if not search_results:
             return []
         seen, sources = set(), []
         for r in search_results:
-            key = r.get("file_path") or r.get("file_name", "")
-            if key and key not in seen:
-                seen.add(key)
-                sources.append({
-                    "file_name": r.get("file_name", ""),
-                    "file_path": r.get("file_path", ""),
-                    "score":     round(r.get("rrf_score", r.get("score", 0)), 4)
-                })
+            meta = r.get("metadata") or {}
+            nom = r.get("file_name") or meta.get("file_name", "")
+            chemin = r.get("file_path") or meta.get("file_path", "")
+            debut = meta.get("page_start", r.get("page_start"))
+            fin = meta.get("page_end", r.get("page_end"))
+            key = (chemin or nom, debut, fin)
+            if not (chemin or nom) or key in seen:
+                continue
+            seen.add(key)
+            sources.append({
+                "file_name":  nom,
+                "file_path":  chemin,
+                "page_start": debut,
+                "page_end":   fin,
+                "score":      round(r.get("rrf_score", r.get("score", 0)), 4)
+            })
         return sources[:10]

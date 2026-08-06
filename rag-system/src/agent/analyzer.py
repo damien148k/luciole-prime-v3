@@ -592,17 +592,39 @@ Résumé:"""
         except Exception:
             return f"J'ai trouvé {len(files)} fichiers correspondant à votre recherche."
     
+    @staticmethod
+    def _etiquette_source(chunk: Dict) -> str:
+        """Étiquette d'un passage, avec sa pagination quand elle est lue.
+
+        La pagination vit dans chunk["metadata"] : elle est recopiée là par
+        dense_search.py et bm25_search.py, et le reranker conserve les
+        dictionnaires. Elle était donc disponible ici et jetée, ce qui
+        rendait toute citation de page impossible côté modèle.
+
+        Aucune convention de nommage n'est supposée : le nom de fichier est
+        rendu tel quel, le modèle y lit le tome s'il y figure.
+        """
+        meta = chunk.get("metadata") or {}
+        nom = chunk.get("file_name") or meta.get("file_name") or ""
+        debut = meta.get("page_start", chunk.get("page_start"))
+        fin = meta.get("page_end", chunk.get("page_end"))
+        if debut is None:
+            return f"[Source: {nom}]"
+        if fin is None or fin == debut:
+            return f"[Source: {nom}, page {debut}]"
+        return f"[Source: {nom}, pages {debut} à {fin}]"
+
     def _build_context(self, chunks: List[Dict]) -> str:
         """Construit le contexte à partir des chunks"""
         if not chunks:
             return ""
-        
+
         context_parts = []
         for chunk in chunks[:15]:
             text = chunk.get("text", "")
-            file_name = chunk.get("file_name", "")
-            context_parts.append(f"[Source: {file_name}]\n{text}")
-        
+            context_parts.append(
+                f"{self._etiquette_source(chunk)}\n{text}")
+
         return "\n\n---\n\n".join(context_parts)
     
     def _build_comparison_context(
