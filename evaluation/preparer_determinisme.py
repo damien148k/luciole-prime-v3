@@ -5,13 +5,13 @@ preparer_determinisme.py
 Deux choses, dans cet ordre, et rien d'autre.
 
 1. Inventaire. Compare les fichiers Python presents dans le conteneur avec
-   ceux de la branche main du depot au commit 7dbdbac. La comparaison se
+   ceux de la branche main du depot au commit 9b411a5. La comparaison se
    fait par l'empreinte git du contenu, la meme que celle affichee par
    GitHub, donc aucune ambiguite possible. Sortie : la liste des fichiers
    qui different, manquent ou sont en trop.
 
 2. Configuration du determinisme, seulement avec --appliquer.
-   Lu dans rag-system/src/generation/llm.py au commit 7dbdbac :
+   Lu dans rag-system/src/generation/llm.py au commit 9b411a5 :
        self.temperature = llm_config.get("temperature",  0.0)
        self.seed        = llm_config.get("seed",         42)
    Les valeurs par defaut du code ne s'appliquent que si la cle est
@@ -40,9 +40,9 @@ import time
 
 RACINE_SRC = "/app/src"
 CONFIG = "/app/config/settings.yaml"
-COMMIT = "7dbdbac"
+COMMIT = "9b411a5"
 
-# Empreintes git des fichiers .py de rag-system/src sur main au commit 7dbdbac.
+# Empreintes git des fichiers .py de rag-system/src sur main au commit 9b411a5.
 REFERENCE = {
     "src/__init__.py": "386535dc51b50fd347cf18fc0b5ae2ccd597e637",
     "src/agent/__init__.py": "415dee60301b19a19a886545efdf35c98eeb900d",
@@ -55,7 +55,7 @@ REFERENCE = {
     "src/api/__init__.py": "2603cda5f72c80b149acd88ff91eb4d3b8ec12e4",
     "src/api/admin_ui.py": "99047cfe18626085f648df666edbf2520edeaf53",
     "src/api/auth.py": "2a71b67028125b341e8bb3bffc0f7ada83df8b62",
-    "src/api/chat_ui.py": "3eaaac47a5ee87759fd79ed26152de8aaa93584c",
+    "src/api/chat_ui.py": "4335aeae9a1330f9b63101c097ab5bb85ea0c59b",
     "src/api/feedback_ui.py": "4e9a126020020d5a112e73c8a4941048f1033967",
     "src/api/main.py": "6a2912a23aafe891066f8746e42712ff0ea9c38d",
     "src/config_loader.py": "2771784d049a42d8bb44ce3b99cd69af271acbf3",

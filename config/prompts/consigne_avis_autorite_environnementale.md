@@ -6,12 +6,21 @@ transmets-le en `custom_prompt` sur `/api/query`.
 ## Ce que cette consigne change, mesure
 
 Sur vingt remarques d'un avis d'autorite environnementale, memes vingt
-questions, meme corpus, meme modele, mesure des 5 et 6 aout 2026 :
+questions, meme corpus, meme modele :
 
-| bras | esquives sur 20 | bon tome | caracteres medians |
-|---|---|---|---|
-| question posee telle quelle | 15 | 9 / 10 | 1139 |
-| question posee avec cette consigne | 0 | 9 / 10 | 2149 |
+| bras | esquives sur 20 | bon tome | caracteres medians | mesure |
+|---|---|---|---|---|
+| question posee telle quelle | 15 | 9 / 10 | 1139 | 5 aout 2026 |
+| question posee avec cette consigne | 0 | 9 / 10 | 2149 | 6 aout 2026, commit 7dbdbac |
+
+Precision honnete sur ces deux lignes : elles ne sortent pas du meme etat
+du code. Le bras sans consigne a ete mesure le 5 aout, avant les correctifs
+de determinisme et avant la bascule des sources sur le commit 7dbdbac. Il
+n'a pas ete rejoue depuis. Le bras avec consigne a rendu zero esquive dans
+les deux etats du code, avant et apres la bascule. L'ecart est donc etabli
+sur l'ancien etat, et seule la valeur zero est confirmee sur l'etat actuel.
+Pour le refaire proprement sur ton corpus, `campagne_consigne.py` rejoue
+les deux bras a la suite dans le meme etat du code.
 
 Une esquive est une reponse qui annonce l'absence de l'information avant
 d'avoir expose ce que le dossier contient. C'est le mode d'echec propre a
