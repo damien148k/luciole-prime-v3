@@ -235,6 +235,10 @@ services:
     - TZ=${TZ:-Europe/Paris}
     - INSTANCE_NAME=${INSTANCE_NAME}
     - AGENT_URL=http://agent:8000
+    # Route empruntee par le chat : agent pour la boucle agentique,
+    # classique pour le pipeline procedural en une passe. Voir
+    # CHAT_ROUTE en tete de rag-system/src/api/chat_ui.py.
+    - CHAT_ROUTE=${CHAT_ROUTE:-agent}
     - HF_HUB_OFFLINE=1
     - TRANSFORMERS_OFFLINE=1
     volumes:

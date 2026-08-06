@@ -33,7 +33,17 @@ llm:
   model: qwen3-30b-a3b-instruct
   base_url: http://tensorrt-llm:8000
   api_format: openai
-  temperature: 0.1
+  # Determinisme. temperature 0 et seed fixe sont ce qui rend une campagne
+  # comparable a la suivante. Mesure du 6 aout 2026, deux passages du meme
+  # bras sur les memes vingt remarques : dix-neuf reponses identiques au
+  # caractere sur vingt, zero verdict change. Avant ces deux reglages, le
+  # meme protocole donnait sept reponses identiques sur vingt, ce qui
+  # interdisait de conclure sur un ecart d'un ou deux cas.
+  # llm.py lit temperature avec 0.0 pour defaut et seed avec 42, mais un
+  # settings.yaml qui porte une autre valeur l'emporte : d'ou ces deux
+  # lignes explicites.
+  temperature: 0
+  seed: 42
   max_tokens: 4096
   # num_ctx non utilisé par TRT-LLM (context window fixée à la compilation : 32768 tokens)
   num_ctx: 32768
