@@ -863,13 +863,19 @@ def get_orchestrator(index_name: str = None):
         use_reranker=_use_reranker,
         rerank_candidates=int(_retrieval_cfg.get("fusion_top_k", 30)),
     )
-    # Reutilise le meme QueryRewriter singleton que le pipeline classique
-    # /api/query (voir _get_query_rewriter), pour que l'agent beneficie de
-    # la meme reformulation de requete sans dupliquer son chargement.
+    # Pas de QueryRewriter dans la boucle agentique. Retire sur mesure :
+    # huit campagnes du jeu MRAe lancees dos a dos, quatre avec et quatre
+    # sans, ordre alterne equilibre. Aucun verdict change, ni dans un sens
+    # ni dans l'autre, y compris sur les trois seuls cas ou le rewriter se
+    # declenche. Cout mesure sur ces trois cas : 50 a 100 pour cent de
+    # requetes supplementaires, le rewriter remplacant la requete distillee
+    # par le planificateur par la question recopiee mot pour mot.
+    # Le planificateur formule deja ses propres requetes et sait les
+    # reformuler entre deux etapes. Le module reste charge et utilise par le
+    # pipeline procedural /api/query, qui n'est pas touche ici.
     orchestrator = AgentOrchestrator(
         tool_registry=tool_registry,
         llm_generator=analyzer.llm_generator,
-        query_rewriter=_get_query_rewriter(),
     )
     _orchestrators[resolved_index] = {"analyzer": analyzer, "orchestrator": orchestrator}
     return orchestrator
