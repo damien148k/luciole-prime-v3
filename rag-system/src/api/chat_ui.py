@@ -39,6 +39,39 @@ app.add_middleware(
 AGENT_URL = os.environ.get("AGENT_URL", "http://localhost:8500")
 SERVICE_NAME = os.environ.get("INSTANCE_NAME", "Luciole")
 
+# Route empruntee par le chat pour repondre.
+#
+#   agent      /api/agent/run, boucle agentique bornee. Comportement en
+#              place depuis le chantier PR C. Valeur par defaut, pour ne
+#              changer le comportement d'aucune instance existante.
+#   classique  /api/query, pipeline procedural en une passe.
+#
+# Pourquoi cet interrupteur. Sur le jeu de vingt avis d'autorite
+# environnementale de l'instance mrae, mesure les 5 et 6 aout 2026 sur les
+# memes vingt remarques, le pipeline procedural avec consigne de
+# generation rend zero esquive et neuf bons tomes sur dix en quatorze
+# minutes, la ou la boucle agentique rend huit bons tomes, deux mauvais et
+# quatre absences de reponse. Le plancher de bruit du pipeline a ete
+# mesure le 6 aout : dix-neuf reponses identiques au caractere sur vingt
+# entre deux passages, zero verdict change. Tant que le chat ne peut pas
+# emprunter cette route, l'interface ne permet pas d'eprouver a la main ce
+# que la mesure designe.
+#
+# Ecarts assumes en mode classique, par rapport au mode agent :
+#   - top_k est transmis, alors que la boucle le laisse choisir au
+#     planificateur a chaque recherche,
+#   - enable_rewriting est transmis tel que l'interface le regle. Le
+#     reglage par defaut de l'interface est actif ; la mesure des 5 et 6
+#     aout a ete faite reecriture desactivee, et le reecriveur a ete
+#     retire de la boucle agentique par la PR 30.
+CHAT_ROUTE = os.environ.get("CHAT_ROUTE", "agent").strip().lower()
+if CHAT_ROUTE not in ("agent", "classique"):
+    # loguru n'interpole pas le style pour-cent, d'ou la f-string.
+    logger.warning(
+        f"CHAT_ROUTE={CHAT_ROUTE!r} inconnu, valeurs acceptees agent ou "
+        f"classique. Repli sur agent.")
+    CHAT_ROUTE = "agent"
+
 # Chemin vers les assets statiques (logo + polices offline)
 STATIC_DIR = Path(__file__).parent / "static"
 LOGO_PATH = STATIC_DIR / "logo.png"
@@ -985,7 +1018,7 @@ body::after{
         <select class="field-select" id="indexSelectMirror" onchange="onIndexMirrorChange()"></select>
       </div>
       <div class="field">
-        <label class="field-label">Top K passages : <span id="topKLabel" style="color:var(--gold)">20</span> <span style="opacity:.6;font-size:.85em">(non applicable en mode agent)</span></label>
+        <label class="field-label">Top K passages : <span id="topKLabel" style="color:var(--gold)">20</span> <span id="topKNote" style="opacity:.6;font-size:.85em">(non applicable en mode agent)</span></label>
         <select class="field-select" id="topKSelect" disabled onchange="document.getElementById('topKLabel').textContent=this.value">
           <option value="3">3</option>
           <option value="5">5</option>
@@ -1077,6 +1110,10 @@ body::after{
 
 <script>
 const AGENT_URL='/api';
+// Route servie par ce conteneur, injectee par le serveur. Voir CHAT_ROUTE
+// en tete de chat_ui.py. En classique, top_k et la reecriture comptent
+// vraiment ; en agent, ils sont ignores par le relais.
+const CHAT_ROUTE='{{CHAT_ROUTE}}';
 let isLoading=false;
 let isInConversation=false;
 let isKeyUser=false;
@@ -1267,12 +1304,33 @@ function loadSettings(){
   }
 }
 
+// En mode classique, top_k est reellement transmis : le selecteur devient
+// utile et se cale sur 30, valeur des campagnes mesurees. En mode agent, il
+// reste inerte, le planificateur choisissant lui-meme a chaque recherche.
+function appliquerRoute(){
+  const sel=document.getElementById('topKSelect');
+  const note=document.getElementById('topKNote');
+  if(CHAT_ROUTE==='classique'){
+    sel.disabled=false;
+    if(!localStorage.getItem('lucioleSettings')){
+      sel.value='30';
+      document.getElementById('topKLabel').textContent='30';
+    }
+    if(note) note.textContent='(pipeline procedural, valeur mesuree 30)';
+  }else{
+    sel.disabled=true;
+    if(note) note.textContent='(non applicable en mode agent)';
+  }
+}
 function getSettings(){
   return {
     customPrompt:document.getElementById('enableCustomPrompt').classList.contains('on')
       ? document.getElementById('customPrompt').value : null,
     topK:parseInt(document.getElementById('topKSelect').value),
-    enableRewriting:true,
+    // En classique, la reecriture est laissee inactive : c'est le reglage
+    // sous lequel le jeu mrae a ete mesure les 5 et 6 aout 2026. En agent,
+    // la valeur est de toute facon abandonnee par le relais.
+    enableRewriting:CHAT_ROUTE!=='classique',
     deepSearch:document.getElementById('enableDeepSearch').classList.contains('on')
   };
 }
@@ -1744,6 +1802,7 @@ document.addEventListener('keydown',e=>{
 window.addEventListener('load',()=>{
   loadIndexes();
   loadSettings();
+  appliquerRoute();  // apres loadSettings, qui pose les valeurs enregistrees
   loadFeedbackConfig();
   setTimeout(()=>document.getElementById('welcomeInput').focus(),200);
 });
@@ -1751,7 +1810,9 @@ window.addEventListener('load',()=>{
 </body>
 </html>
 """
-    return html.replace("{{PAGE_TITLE}}", page_title).replace("{{SERVICE_NAME}}", SERVICE_NAME.lower())
+    return (html.replace("{{PAGE_TITLE}}", page_title)
+                .replace("{{SERVICE_NAME}}", SERVICE_NAME.lower())
+                .replace("{{CHAT_ROUTE}}", CHAT_ROUTE))
 
 
 @app.get("/api/indexes")
@@ -1771,19 +1832,31 @@ async def query(request: ChatRequest):
     """
     Proxy vers l'API agent pour les requetes.
 
-    PR C (chantier chat-sur-agent) : bascule de /api/query (pipeline
-    procedural classique) vers /api/agent/run (boucle agentique bornee).
-    request.enable_rewriting n'est plus transmis : le query rewriting
-    est toujours actif cote agent (parametre __init__ de
-    AgentOrchestrator, pas un flag par requete comme cote classique) ;
-    aucune equivalence directe, ecart mineur documente dans le rapport
-    PR C. request.top_k n'est pas non plus transmis : cote agent c'est
-    le LLM planificateur qui choisit top_k a chaque recherche, choix
-    valide explicitement pour ne pas contraindre la boucle (voir
-    discussion PR C). Le profil agentique utilise est celui resolu par
-    la variable d'environnement AGENT_PROFILE du conteneur agent (pas
-    de champ profile ici : /api/agent/run retombe sur ce defaut).
-    Rollback : voir tag v3.0-chat-classic (etat avant tout ce chantier).
+    La cible depend de CHAT_ROUTE, voir le commentaire de cette variable
+    en tete de fichier.
+
+    CHAT_ROUTE=agent, valeur par defaut : /api/agent/run, boucle
+    agentique bornee. Comportement issu du chantier PR C.
+    request.top_k n'est pas transmis, cote agent c'est le LLM
+    planificateur qui choisit top_k a chaque recherche, choix valide
+    explicitement pour ne pas contraindre la boucle. request.enable_rewriting
+    n'est pas transmis non plus : cote agent, la reecriture est un
+    parametre d'__init__ d'AgentOrchestrator et non un drapeau par
+    requete. La docstring precedente affirmait ici que la reecriture
+    etait toujours active cote agent ; cette phrase est fausse depuis la
+    PR 30, qui a retire l'injection du reecriveur dans get_orchestrator.
+    Le profil agentique utilise est celui resolu par la variable
+    d'environnement AGENT_PROFILE du conteneur agent.
+
+    CHAT_ROUTE=classique : /api/query, pipeline procedural en une passe.
+    top_k et enable_rewriting sont transmis tels que l'interface les
+    regle. C'est la route mesuree les 5 et 6 aout 2026 sur le jeu mrae.
+
+    Dans les deux cas : custom_prompt, index_name, deep_search et
+    l'historique de conversation sont transmis.
+
+    Rollback : CHAT_ROUTE=agent, ou le tag v3.0-chat-classic pour l'etat
+    anterieur a tout ce chantier.
     """
     try:
         # Convertir l'historique en format dict
@@ -1791,18 +1864,35 @@ async def query(request: ChatRequest):
 
         timeout = 1800.0 if request.deep_search else 1200.0
 
+        if CHAT_ROUTE == "classique":
+            cible = f"{AGENT_URL}/api/query"
+            charge = {
+                "query": request.query,
+                "index_name": request.index_name,
+                "custom_prompt": request.custom_prompt,
+                "deep_search": request.deep_search,
+                "history": history_list,
+                "top_k": request.top_k,
+                "enable_rewriting": request.enable_rewriting,
+            }
+        else:
+            cible = f"{AGENT_URL}/api/agent/run"
+            charge = {
+                "query": request.query,
+                "index_name": request.index_name,
+                "custom_prompt": request.custom_prompt,
+                "deep_search": request.deep_search,
+                "history": history_list,
+            }
+
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{AGENT_URL}/api/agent/run",
-                json={
-                    "query": request.query,
-                    "index_name": request.index_name,
-                    "custom_prompt": request.custom_prompt,
-                    "deep_search": request.deep_search,
-                    "history": history_list
-                }
-            )
-            return response.json()
+            response = await client.post(cible, json=charge)
+            resultat = response.json()
+            # Trace de la route reellement empruntee, pour qu'aucune
+            # comparaison de resultats ne repose sur une supposition.
+            if isinstance(resultat, dict):
+                resultat.setdefault("chat_route", CHAT_ROUTE)
+            return resultat
     except Exception as e:
         logger.error(f"Error querying agent: {e}")
         return {"error": str(e), "response": f"Erreur: {e}"}
