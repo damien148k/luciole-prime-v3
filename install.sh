@@ -213,7 +213,12 @@ llm:
   model: $OLLAMA_MODEL_YAML
   base_url: http://ollama:11434
   api_format: openai
-  temperature: 0.1
+  # Determinisme. temperature 0 et seed fixe rendent une campagne comparable
+  # a la suivante : mesure du 6 aout 2026, dix-neuf reponses identiques au
+  # caractere sur vingt entre deux passages du meme bras, contre sept sur
+  # vingt avant ces deux reglages.
+  temperature: 0
+  seed: 42
   max_tokens: 4096
   num_ctx: 16384
   timeout: 1800
@@ -354,6 +359,14 @@ RERANKER_DEVICE=cpu
 HF_HUB_OFFLINE=1
 TRANSFORMERS_OFFLINE=1
 CUDA_VISIBLE_DEVICES=0
+
+
+# Route empruntee par l'interface de chat.
+#   agent      boucle agentique bornee, /api/agent/run
+#   classique  pipeline procedural en une passe, /api/query
+# Voir docs/REDEPLOIEMENT.md. Defaut agent, pour ne rien changer aux
+# instances en place.
+CHAT_ROUTE=agent
 
 # Auth
 AUTH_SECRET=$SECRET
