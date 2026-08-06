@@ -1712,7 +1712,7 @@ def _build_ragas_analysis(results: list) -> dict:
     n = len(ok_results)
     recs = []
 
-    cur_temp = llm.get("temperature", 0.1)
+    cur_temp = llm.get("temperature", 0.0)
     cur_model = llm.get("model", "?")
     cur_max_tokens = llm.get("max_tokens", 4096)
     cur_rerank_top = retrieval.get("rerank_top_n", 15)
