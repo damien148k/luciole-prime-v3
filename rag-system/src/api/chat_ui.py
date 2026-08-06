@@ -1018,7 +1018,7 @@ body::after{
         <select class="field-select" id="indexSelectMirror" onchange="onIndexMirrorChange()"></select>
       </div>
       <div class="field">
-        <label class="field-label">Top K passages : <span id="topKLabel" style="color:var(--gold)">20</span> <span style="opacity:.6;font-size:.85em">(non applicable en mode agent)</span></label>
+        <label class="field-label">Top K passages : <span id="topKLabel" style="color:var(--gold)">20</span> <span id="topKNote" style="opacity:.6;font-size:.85em">(non applicable en mode agent)</span></label>
         <select class="field-select" id="topKSelect" disabled onchange="document.getElementById('topKLabel').textContent=this.value">
           <option value="3">3</option>
           <option value="5">5</option>
@@ -1110,6 +1110,10 @@ body::after{
 
 <script>
 const AGENT_URL='/api';
+// Route servie par ce conteneur, injectee par le serveur. Voir CHAT_ROUTE
+// en tete de chat_ui.py. En classique, top_k et la reecriture comptent
+// vraiment ; en agent, ils sont ignores par le relais.
+const CHAT_ROUTE='{{CHAT_ROUTE}}';
 let isLoading=false;
 let isInConversation=false;
 let isKeyUser=false;
@@ -1300,12 +1304,33 @@ function loadSettings(){
   }
 }
 
+// En mode classique, top_k est reellement transmis : le selecteur devient
+// utile et se cale sur 30, valeur des campagnes mesurees. En mode agent, il
+// reste inerte, le planificateur choisissant lui-meme a chaque recherche.
+function appliquerRoute(){
+  const sel=document.getElementById('topKSelect');
+  const note=document.getElementById('topKNote');
+  if(CHAT_ROUTE==='classique'){
+    sel.disabled=false;
+    if(!localStorage.getItem('lucioleSettings')){
+      sel.value='30';
+      document.getElementById('topKLabel').textContent='30';
+    }
+    if(note) note.textContent='(pipeline procedural, valeur mesuree 30)';
+  }else{
+    sel.disabled=true;
+    if(note) note.textContent='(non applicable en mode agent)';
+  }
+}
 function getSettings(){
   return {
     customPrompt:document.getElementById('enableCustomPrompt').classList.contains('on')
       ? document.getElementById('customPrompt').value : null,
     topK:parseInt(document.getElementById('topKSelect').value),
-    enableRewriting:true,
+    // En classique, la reecriture est laissee inactive : c'est le reglage
+    // sous lequel le jeu mrae a ete mesure les 5 et 6 aout 2026. En agent,
+    // la valeur est de toute facon abandonnee par le relais.
+    enableRewriting:CHAT_ROUTE!=='classique',
     deepSearch:document.getElementById('enableDeepSearch').classList.contains('on')
   };
 }
@@ -1777,6 +1802,7 @@ document.addEventListener('keydown',e=>{
 window.addEventListener('load',()=>{
   loadIndexes();
   loadSettings();
+  appliquerRoute();  // apres loadSettings, qui pose les valeurs enregistrees
   loadFeedbackConfig();
   setTimeout(()=>document.getElementById('welcomeInput').focus(),200);
 });
@@ -1784,7 +1810,9 @@ window.addEventListener('load',()=>{
 </body>
 </html>
 """
-    return html.replace("{{PAGE_TITLE}}", page_title).replace("{{SERVICE_NAME}}", SERVICE_NAME.lower())
+    return (html.replace("{{PAGE_TITLE}}", page_title)
+                .replace("{{SERVICE_NAME}}", SERVICE_NAME.lower())
+                .replace("{{CHAT_ROUTE}}", CHAT_ROUTE))
 
 
 @app.get("/api/indexes")
