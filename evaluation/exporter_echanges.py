@@ -67,11 +67,28 @@ CONTEXTES = os.environ.get("CONTEXTES", "0") == "1"
 SORTIE = os.path.join(BASE, f"echanges_{LABEL}.jsonl")
 RAPPORT = os.path.join(BASE, f"rapport_{LABEL}.txt")
 
+# Singulier ET pluriel. Le motif d'origine ne couvrait que le pluriel :
+# "le dossier ne mentionne pas" passait pour une reponse.
 ESQUIVE = re.compile(
-    r"ne contiennent (aucune|pas)|aucune information|n'est pas (explicitement )?"
-    r"mentionn|ne mentionnent pas|ne fournissent pas|pas d'information|"
-    r"ne permettent pas|ne citent pas|n'en parlent pas", re.I)
-SOURCE_CITEE = re.compile(r"\.pdf|tome_\d", re.I)
+    # ne / n' + <verbe> + pas / aucun, aux deux nombres
+    r"n(?:e |')(?:contien(?:t|nent)|mentionn(?:e|ent)|fourni(?:t|ssent)|"
+    r"permet(?:tent)?|cite(?:nt)?|precise(?:nt)?|indique(?:nt)?|"
+    r"detaille(?:nt)?|comporte(?:nt)?|evoque(?:nt)?|abord(?:e|ent)) "
+    r"(?:pas|aucun)|"
+    # n'en parle(nt) pas
+    r"n'en parle(?:nt)? pas|"
+    # n'est / ne sont pas mentionne, precise, indique, detaille, aborde
+    r"(?:n'est|ne sont) pas (?:explicitement )?"
+    r"(?:mentionn|precis|indiqu|detaill|abord)|"
+    # tournures nominales
+    r"aucune information|aucune mention|aucune precision|aucun element|"
+    r"pas d'information|pas de mention|pas de precision|"
+    # absence dite autrement
+    r"reste(?:nt)? muet|est absente? d|sont absentes? d", re.I)
+# Le souligne n'est pas obligatoire : le modele ecrit "Tome 4, page 1"
+# aussi souvent que "tome_4.pdf". Exiger tome_\d faisait passer une
+# reponse correctement sourcee pour une reponse sans source.
+SOURCE_CITEE = re.compile(r"\.pdf|tome[_ ]?\d|\[?source\s*:", re.I)
 
 
 def verdict(texte):
