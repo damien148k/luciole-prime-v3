@@ -620,7 +620,7 @@ Résumé:"""
             return ""
 
         context_parts = []
-        for chunk in chunks[:15]:
+        for chunk in chunks[:self.rerank_top_n]:
             text = chunk.get("text", "")
             context_parts.append(
                 f"{self._etiquette_source(chunk)}\n{text}")
