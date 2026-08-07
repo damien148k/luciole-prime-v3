@@ -1458,7 +1458,7 @@ async function askQuestion(question){
       });
       conv.appendChild(answerBlock);
       fillSidebar(sources,passages);
-      if(sources.length>0||passages.length>0) openSidebar();
+      if(passages.length>0) openSidebar();
       scrollToBottom();
     } else if(data.error){
       conv.appendChild(buildErrorBlock(typeof data.error==='string'?data.error:JSON.stringify(data.error)));
@@ -1486,33 +1486,72 @@ function buildErrorBlock(msg){
   return block;
 }
 
+// Regroupe les passages par document pour alimenter le panneau Sources.
+//
+// Le champ `sources` de l'API est tronque a dix entrees par
+// _extract_sources (src/generation/llm.py) : un document dont les
+// passages arrivaient au-dela du dixieme rang disparaissait du panneau
+// alors que le generateur l'avait bien lu. `passages` contient la
+// totalite du contexte, on l'agrege donc ici.
+//
+// Renvoie une liste triee par meilleur score, chaque entree portant le
+// nom du fichier, le nombre de passages retenus et les intervalles de
+// pages couverts.
+function grouperParDocument(passages){
+  const docs=new Map();
+  (passages||[]).forEach(p=>{
+    const nom=p.file_name||'Document';
+    let d=docs.get(nom);
+    if(!d){d={file_name:nom,count:0,score:0,pages:[]};docs.set(nom,d);}
+    d.count++;
+    const sc=p.score||0;
+    if(sc>d.score) d.score=sc;
+    const a=p.page_start||p.page||null;
+    if(a!==null){
+      const b=p.page_end||a;
+      if(!d.pages.some(x=>x[0]===a&&x[1]===b)) d.pages.push([a,b]);
+    }
+  });
+  return Array.from(docs.values())
+    .sort((x,y)=>y.score-x.score)
+    .map(d=>{
+      d.pages.sort((m,n)=>m[0]-n[0]);
+      d.pages_label=d.pages.map(([a,b])=>a===b?'p. '+a:'p. '+a+'-'+b).join(', ');
+      d.count_label=d.count+' passage'+(d.count>1?'s':'');
+      return d;
+    });
+}
+
 function buildAnswerBlock(d){
   messageCounter++;
   const fbId='fb-'+messageCounter;
   const block=document.createElement('div');
   block.className='answer-block';
 
-  // Sources grid
+  // Sources grid, agregee par document a partir des passages.
+  // Voir grouperParDocument : le champ renvoye par l'API est tronque a
+  // dix entrees et ne reflete pas l'integralite du contexte lu.
   let sourcesHtml='';
-  if(d.sources && d.sources.length>0){
-    const cards=d.sources.map((s,i)=>{
+  const docs=grouperParDocument(d.passages);
+  if(docs.length>0){
+    const cards=docs.map((doc,i)=>{
       const num=i+1;
-      const fileName=typeof s==='string'?s:(s.file_name||s.name||'Document');
-      const title=typeof s==='string'?s:(s.title||s.section||fileName);
+      const fileName=doc.file_name;
       const fav=fileName.charAt(0).toUpperCase();
+      const detail=[doc.count_label,doc.pages_label].filter(Boolean).join(' · ');
       return `<a class="source-card" onclick="highlightSource(${num})">
         <div class="source-num">${num}</div>
-        <div class="source-title">${escapeHtml(title)}</div>
+        <div class="source-title">${escapeHtml(fileName)}</div>
         <div class="source-meta">
           <div class="source-favicon">${escapeHtml(fav)}</div>
-          <span>${escapeHtml(fileName)}</span>
+          <span>${escapeHtml(detail)}</span>
         </div>
       </a>`;
     }).join('');
     sourcesHtml=`<div class="sources-section">
       <div class="sources-label">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        Sources · ${d.sources.length} document${d.sources.length>1?'s':''}
+        Sources · ${docs.length} document${docs.length>1?'s':''}
       </div>
       <div class="sources-grid">${cards}</div>
     </div>`;
@@ -1537,7 +1576,7 @@ function buildAnswerBlock(d){
     feedbackDataStore[fbId]={
       query:d.query,
       response:d.response,
-      sources:(d.sources||[]).map(s=>typeof s==='string'?s:(s.file_name||JSON.stringify(s))),
+      sources:docs.map(doc=>doc.file_name),
       indexName:d.index_name||'',
       processingTime:d.processing_time_ms||0
     };
@@ -1587,28 +1626,25 @@ function copyAnswer(btn){
 function fillSidebar(sources,passages){
   const ps=document.getElementById('paneSources');
   const pp=document.getElementById('panePassages');
-  document.getElementById('sbCount').textContent=sources.length;
-  document.getElementById('sbBadge').textContent=sources.length;
+  const docs=grouperParDocument(passages);
+  document.getElementById('sbCount').textContent=docs.length;
+  document.getElementById('sbBadge').textContent=docs.length;
 
-  if(sources.length===0){
+  if(docs.length===0){
     ps.innerHTML='<div class="sb-empty">Aucune source pour cette réponse.</div>';
   } else {
-    ps.innerHTML=sources.map((s,i)=>{
+    ps.innerHTML=docs.map((doc,i)=>{
       const num=i+1;
-      const fileName=typeof s==='string'?s:(s.file_name||s.name||'Document');
-      const title=typeof s==='string'?s:(s.title||s.section||fileName);
       const meta=[];
-      if(typeof s==='object'){
-        if(s.page) meta.push('p.'+s.page);
-        if(s.section && s.section!==title) meta.push(s.section);
-      }
-      const score=(typeof s==='object' && s.score)?s.score.toFixed(2):'';
+      if(doc.pages_label) meta.push(doc.pages_label);
+      meta.push(doc.count_label);
+      const score=doc.score?doc.score.toFixed(2):'';
       return `<a class="sb-source" id="src-${num}" onclick="switchPane('passages')">
         <div class="sb-source-num">${num}</div>
         <div class="sb-source-body">
-          <div class="sb-source-title">${escapeHtml(title)}</div>
+          <div class="sb-source-title">${escapeHtml(doc.file_name)}</div>
           <div class="sb-source-meta">
-            <span>${escapeHtml(fileName)}${meta.length?' · '+escapeHtml(meta.join(' · ')):''}</span>
+            <span>${escapeHtml(meta.join(' · '))}</span>
             ${score?`<span class="sb-source-score">${score}</span>`:''}
           </div>
         </div>
