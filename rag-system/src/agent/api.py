@@ -20,6 +20,8 @@ from loguru import logger
 import yaml
 import httpx
 
+from src.agent.iterative import IterativePipeline
+
 from src.generation.llm_backend import (
     detect_llm_backend,
     backend_supports_hot_swap,
@@ -1339,6 +1341,81 @@ async def simple_query(request: QueryRequest):
         
     except Exception as e:
         logger.error(f"Query error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/query2")
+async def iterative_query(request: QueryRequest):
+    """
+    Pipeline iteratif v2 - ENDPOINT EXPERIMENTAL (voir DESIGN_agent_v2).
+
+    Meme contrat que /api/query (QueryRequest) : query, index_name, top_k,
+    custom_prompt, history. enable_rewriting et deep_search sont ignores.
+
+    Difference avec /api/query : apres la recherche classique, une analyse
+    de couverture (1 appel LLM sur les passages complets) determine si les
+    passages suffisent. Sinon, une seconde recherche ciblee (requetes
+    proposees par l'analyse, vocabulaire metier) complete les passages
+    avant la generation finale. Si la couverture est bonne, la reponse est
+    STRICTEMENT identique a /api/query (meme calcul).
+
+    La reponse inclut une cle "iterative" tracant la couverture.
+    """
+    try:
+        history_dicts = None
+        if request.history and len(request.history) > 0:
+            history_dicts = [{"role": msg.role, "content": msg.content} for msg in request.history]
+
+        analyzer = get_analyzer(index_name=_resolve_index_name(request.index_name))
+        pipeline = IterativePipeline(analyzer)
+
+        start_time = time.time()
+        result = pipeline.run(
+            query=request.query,
+            top_k=request.top_k,
+            custom_prompt=request.custom_prompt,
+            history=history_dicts,
+            max_rounds=1,
+        )
+        elapsed_ms = int((time.time() - start_time) * 1000)
+
+        search_results_raw = result.get("search_results", [])
+        passages = []
+        for chunk in search_results_raw[:30]:
+            p = {
+                "text": (chunk.get("text") or chunk.get("content") or "")[:1000],
+                "file_name": chunk.get("file_name", ""),
+                "score": round(chunk.get("rrf_score", chunk.get("score", 0)) or 0, 4),
+            }
+            meta = chunk.get("metadata", {}) or {}
+            _reporter_pages(p, meta)
+            if meta.get("section"):
+                p["section"] = meta["section"]
+            passages.append(p)
+
+        response_data = {
+            "response": result.get("response", ""),
+            "sources": result.get("sources", []),
+            "passages": passages,
+            "mode": "chat_iteratif_v2",
+            "index_name": _resolve_index_name(request.index_name),
+            "iterative": result.get("iterative", {}),
+            "processing_time_ms": elapsed_ms,
+        }
+
+        _log_query(
+            question=request.query,
+            answer=response_data.get("response", ""),
+            sources=response_data.get("sources", []),
+            index_name=response_data.get("index_name", ""),
+            processing_time_ms=elapsed_ms,
+            search_results=search_results_raw,
+        )
+
+        return response_data
+
+    except Exception as e:
+        logger.error(f"Query2 error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
