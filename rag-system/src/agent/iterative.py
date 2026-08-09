@@ -87,6 +87,42 @@ Sujet :"""
 # modèle, seul le sujet vient du LLM.
 QUESTION_TEMPLATE = "Que disent les documents sur {sujet} ?"
 
+# Lettres attendues dans un sujet en français : alphabet de base et
+# accents effectivement utilisés (àâäçéèêëîïôöùûüÿæœ et majuscules).
+_LETTRES_FR = re.compile(r"[a-zàâäçéèêëîïôöùûüÿæœ]", re.IGNORECASE)
+
+
+def _sujet_incoherent(sujet: str) -> bool:
+    """Détecte une extraction de sujet corrompue ou hors langue.
+
+    Le sujet attendu est un court groupe nominal en français. Le modèle
+    multilingual produit parfois du charabia (symboles Latin-1, lettres
+    d'autres alphabets) sur les demandes longues — mesuré le 9 août 2026
+    sur Beaumont Sud, où le sujet extrait finissait en « ¥å¿ç¼º¤±çæå ».
+    Un sujet corrompu garantit une recherche B et une réponse hors sujet.
+
+    Signaux de corruption :
+      - lettres hors du répertoire français en proportion notable
+        (seuil 15 % : un vrai sujet est à ~100 % de lettres françaises,
+        le charabia chute fortement) ;
+      - symboles non alphabétiques autres que apostrophe, tiret, espace
+        (¥, ¿, ¼, ¤, ±...) ;
+      - plus de 12 mots (la consigne en fixe 6).
+    """
+    if len(sujet.split()) > 12:
+        return True
+    lettres = sum(1 for c in sujet if c.isalpha())
+    if lettres == 0:
+        return True
+    francaises = len(_LETTRES_FR.findall(sujet))
+    if francaises / lettres < 0.85:
+        return True
+    for c in sujet:
+        if not (c.isalpha() or c in " '-"):
+            return True
+    return False
+
+
 COVERAGE_SYSTEM_PROMPT = (
     "Tu évalues si des extraits documentaires contiennent les informations "
     "nécessaires pour répondre à une demande. Tu réponds uniquement en JSON "
@@ -327,6 +363,17 @@ class IterativePipeline:
         if not sujet or len(sujet) < 3 or len(sujet) > 120:
             logger.warning(
                 f"query2: sujet extrait invalide ({len(sujet)} car), demande conservee"
+            )
+            return query
+
+        # Le modèle multilingual produit parfois une sortie corrompue
+        # (caractères d'une autre langue, charabia) sur les demandes
+        # longues : mesuré sur Beaumont Sud le 9 août 2026. Un sujet
+        # corrompu garantit une recherche B et une réponse hors sujet ;
+        # le repli sur la demande d'origine est toujours préférable.
+        if _sujet_incoherent(sujet):
+            logger.warning(
+                f"query2: sujet incoherent ({sujet[:60]!r}), demande conservee"
             )
             return query
 
