@@ -1,5 +1,5 @@
 """
-Pipeline itératif v2.7 (endpoint expérimental /api/query2).
+Pipeline itératif v2.8 (endpoint expérimental /api/query2).
 
 Conception : DESIGN_agent_v2_pipeline_iteratif.md (8 août 2026).
 
@@ -128,7 +128,15 @@ def _sujet_incoherent(sujet: str) -> bool:
     if francaises / lettres < 0.85:
         return True
     for c in sujet:
-        if not (c.isalpha() or c in " '-"):
+        if c.isalpha():
+            # Liste blanche (v2.8) : toute lettre hors du répertoire
+            # français signale une sortie corrompue, même en petite
+            # proportion — une courte queue CJK (2-4 caractères) passe
+            # sous le seuil du ratio 85 % (mesuré sur Beaumont Sud B1,
+            # retry du 10 août : « ...éviter réduire补偿Head »).
+            if not _LETTRES_FR.match(c):
+                return True
+        elif c not in " '-":
             return True
     return False
 
@@ -312,7 +320,7 @@ class IterativePipeline:
         trace["couverture"] = couverture
         logger.info(
             f"query2: couverture={couverture['verdict']}, "
-            f"{len(couverture['requetes'])} requete(s) proposee(s)"
+            f"requetes={couverture['requetes']}"
         )
 
         if couverture["verdict"] == "COUVERT" or not couverture["requetes"] or max_rounds < 1:
@@ -326,7 +334,7 @@ class IterativePipeline:
         # utilisée pour la voie générale et la génération. L'étape 1
         # reste sur la demande d'origine : le repli COUVERT retourne
         # toujours la réponse classique à l'identique.
-        question = self._reformuler_en_question(query)
+        question = self._reformuler_en_question(query, couverture["requetes"])
         trace["reformulation"] = {"originale": query, "question": question}
         if question != query:
             logger.info(f"query2: demande transformee en question directe")
@@ -340,7 +348,9 @@ class IterativePipeline:
     # ------------------------------------------------------------------
     # Étape 3a — extraction du sujet, puis construction de la question
     # ------------------------------------------------------------------
-    def _reformuler_en_question(self, query: str) -> str:
+    def _reformuler_en_question(
+        self, query: str, requetes: Optional[List[str]] = None
+    ) -> str:
         """Construit une question directe à partir du sujet de la demande.
 
         Deux temps (option C) :
@@ -353,11 +363,16 @@ class IterativePipeline:
         Une demande déjà interrogative (contient « ? ») est conservée
         telle quelle, sans appel LLM.
 
-        Extraction en deux chances (v2.7) : le décrochage vers une
-        sortie corrompue est un glitch stochastique du modèle
-        multilingual — une seconde tentative avec consigne renforcée
-        le corrige le plus souvent. Le repli sur la demande d'origine
-        reste le filet final : jamais pire.
+        Cascade de replis (v2.7, v2.8) :
+          1. extraction simple ;
+          2. retry avec consigne de langue renforcée (v2.7) ;
+          3. repli sur la première requête de couverture propre (v2.8) :
+             les requêtes ciblées sont le même objet qu'un sujet (3-6
+             mots de contenu) mais produites en JSON — un format qui ne
+             déraille pas, contrairement au texte libre (mesuré sur
+             Beaumont Sud B1 : déraillement DÉTERMINISTE à température 0
+             sur « éviter réduire compenser », le retry n'y change rien) ;
+          4. repli final sur la demande d'origine : jamais pire.
         """
         if "?" in query:
             return query
@@ -375,6 +390,15 @@ class IterativePipeline:
                     f"query2: sujet toujours incoherent au retry ({sujet[:60]!r})"
                 )
                 sujet = None
+        if sujet is None and requetes:
+            for req in requetes:
+                req = req.strip().rstrip(".")
+                if req and len(req) <= 120 and not _sujet_incoherent(req):
+                    sujet = req
+                    logger.info(
+                        f"query2: repli sur requete couverture: '{req[:80]}'"
+                    )
+                    break
         if sujet is None:
             logger.warning("query2: extraction impossible, demande conservee")
             return query
