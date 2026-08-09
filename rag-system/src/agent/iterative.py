@@ -13,13 +13,16 @@ de la route agent v1 (mesurée : 11 esquives sur 16 au benchmark MRAe) :
   2. ANALYSE DE COUVERTURE : 1 appel LLM qui lit les passages COMPLETS
      (pas des extraits de 400 caractères comme la boucle v1) et répond en
      JSON structuré : verdict, manques, requêtes ciblées.
-  3. RECHERCHE B (si besoin) : quota réservé + reformulation.
-     a. REFORMULATION : la demande est transformée en question directe
-        (générique : une recommandation/instruction devient une question
-        sur son sujet). Sans cela, le LLM commente l'absence de la
-        demande elle-même dans les documents — qui ne la contiennent
-        jamais — au lieu de répondre sur le fond (mesuré : R11 esquivé
-        malgré les bonnes pages dans les sources).
+  3. RECHERCHE B (si besoin) : quota réservé + question construite.
+     a. QUESTION CONSTRUITE : le LLM extrait le SUJET de la demande
+        (3-6 mots, tâche bornée), puis le code assemble la question
+        (« Que disent les documents sur {sujet} ? »). Sans cela, le LLM
+        commente l'absence de la demande elle-même dans les documents —
+        qui ne la contiennent jamais — au lieu de répondre sur le fond
+        (mesuré : R11 esquivé malgré les bonnes pages dans les sources).
+        La reformulation libre (v2.4) laissait parfois l'auteur de la
+        demande devenir le sujet de la question ; l'extraction bornée
+        supprime ce mode d'échec.
      b. QUOTA RÉSERVÉ : la fusion multi-query dilue les passages trouvés
         par les requêtes ciblées (mesuré : une page au rang 3 de sa
         requête tombe au rang 55 du pool fusionné, puis est éliminée par
@@ -56,32 +59,33 @@ COVERAGE_MAX_QUERIES = 3
 # (quota de diversité : empêche le sujet dominant d'écraser les manques).
 QUOTA_PAR_REQUETE = 5
 
-REFORMULATION_SYSTEM_PROMPT = (
-    "Tu reformules des demandes en questions directes. Tu réponds "
-    "uniquement avec la question reformulée, sans commentaire."
+SUJET_SYSTEM_PROMPT = (
+    "Tu extrais le sujet d'une demande en quelques mots. Tu réponds "
+    "uniquement avec le sujet, sans commentaire."
 )
 
-REFORMULATION_USER_TEMPLATE = """Transforme la demande suivante en une question directe portant sur son sujet.
+SUJET_USER_TEMPLATE = """Quel est le sujet de la demande suivante ?
 
 Règles :
-- si la demande est déjà une question, retourne-la inchangée
-- si c'est une recommandation, une instruction ou une demande de
-  complément, reformule-la en question sur l'information demandée
-- la question porte sur le SUJET (les informations à trouver), JAMAIS
-  sur la demande elle-même ni sur son auteur : n'écris pas « l'autorité
-  recommande-t-elle... », « le client demande-t-il... »
+- 3 à 6 mots, avec le déterminant (le, la, les, du, de la, des, l')
+- le sujet désigne les informations recherchées, JAMAIS l'auteur de
+  la demande (autorité, client, comité...) ni la demande elle-même
 - garde la langue de la demande
-- une seule question, concise
 
 Exemples :
 Demande : Il est recommandé de préciser le calendrier des travaux et les horaires de chantier.
-Question : Quel est le calendrier prévu des travaux et les horaires de chantier ?
+Sujet : le calendrier des travaux et les horaires de chantier
 
 Demande : Le comité demande de compléter le rapport avec une analyse des coûts de maintenance.
-Question : Quelle analyse des coûts de maintenance le rapport présente-t-il ?
+Sujet : l'analyse des coûts de maintenance
 
 Demande : {query}
-Question :"""
+Sujet :"""
+
+# Gabarit de construction de la question à partir du sujet extrait.
+# Mécanique volontairement : la forme de la question ne dépend plus du
+# modèle, seul le sujet vient du LLM.
+QUESTION_TEMPLATE = "Que disent les documents sur {sujet} ?"
 
 COVERAGE_SYSTEM_PROMPT = (
     "Tu évalues si des extraits documentaires contiennent les informations "
@@ -279,7 +283,7 @@ class IterativePipeline:
         question = self._reformuler_en_question(query)
         trace["reformulation"] = {"originale": query, "question": question}
         if question != query:
-            logger.info(f"query2: demande reformulee en question directe")
+            logger.info(f"query2: demande transformee en question directe")
 
         result_b = self._recherche_b_quota(
             query, question, couverture["requetes"], options, history, trace
@@ -288,35 +292,46 @@ class IterativePipeline:
         return result_b
 
     # ------------------------------------------------------------------
-    # Étape 3a — reformulation de la demande en question directe
+    # Étape 3a — extraction du sujet, puis construction de la question
     # ------------------------------------------------------------------
     def _reformuler_en_question(self, query: str) -> str:
-        """Reformule la demande en question directe (générique, 1 appel LLM).
+        """Construit une question directe à partir du sujet de la demande.
 
-        Une demande sous forme de recommandation ou d'instruction pousse
-        le LLM à commenter l'absence de la demande elle-même dans les
-        documents (qui ne la contiennent jamais) au lieu de répondre sur
-        le fond. La forme question supprime ce biais à la source.
+        Deux temps (option C) :
+          1. le LLM extrait le SUJET de la demande en 3-6 mots — tâche
+             simple et bornée, qui ne laisse pas l'auteur de la demande
+             (autorité, client...) devenir le sujet de la question ;
+          2. le CODE assemble la question via QUESTION_TEMPLATE — la
+             forme interrogative ne dépend plus du modèle.
 
-        Repli sur la demande d'origine en cas d'échec : jamais pire.
+        Une demande déjà interrogative (contient « ? ») est conservée
+        telle quelle, sans appel LLM. Repli sur la demande d'origine en
+        cas d'échec : jamais pire.
         """
+        if "?" in query:
+            return query
+
         try:
             brut = self.analyzer.llm_generator.call_llm(
-                REFORMULATION_SYSTEM_PROMPT,
-                REFORMULATION_USER_TEMPLATE.format(query=query),
+                SUJET_SYSTEM_PROMPT,
+                SUJET_USER_TEMPLATE.format(query=query),
             )
         except Exception as e:
-            logger.warning(f"query2: echec reformulation ({e}), demande conservee")
+            logger.warning(f"query2: echec extraction sujet ({e}), demande conservee")
             return query
 
-        question = (brut or "").strip().strip('"').strip()
-        # Une seule ligne, sans préfixe parasite éventuel
-        question = question.split("\n")[0].strip()
-        question = re.sub(r"^question\s*[:\-]\s*", "", question, flags=re.IGNORECASE)
-        if not question or len(question) < 10:
-            logger.warning("query2: reformulation vide, demande conservee")
+        sujet = (brut or "").strip().strip('"').strip()
+        # Une seule ligne, sans préfixe parasite éventuel ni point final
+        sujet = sujet.split("\n")[0].strip().rstrip(".").strip()
+        sujet = re.sub(r"^sujet\s*[:\-]\s*", "", sujet, flags=re.IGNORECASE)
+        if not sujet or len(sujet) < 3 or len(sujet) > 120:
+            logger.warning(
+                f"query2: sujet extrait invalide ({len(sujet)} car), demande conservee"
+            )
             return query
-        logger.info(f"query2: reformulation -> '{question[:120]}'")
+
+        question = QUESTION_TEMPLATE.format(sujet=sujet)
+        logger.info(f"query2: sujet='{sujet[:80]}' -> question='{question[:120]}'")
         return question
 
     # ------------------------------------------------------------------
