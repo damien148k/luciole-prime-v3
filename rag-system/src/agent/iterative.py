@@ -1,5 +1,5 @@
 """
-Pipeline itératif v2 (endpoint expérimental /api/query2).
+Pipeline itératif v2.7 (endpoint expérimental /api/query2).
 
 Conception : DESIGN_agent_v2_pipeline_iteratif.md (8 août 2026).
 
@@ -81,6 +81,16 @@ Sujet : l'analyse des coûts de maintenance
 
 Demande : {query}
 Sujet :"""
+
+# Consigne renforcée pour la seconde tentative : le modèle multilingual
+# décroche parfois vers une autre langue sur les demandes longues
+# (mesuré sur Beaumont Sud le 9 août 2026) ; le rappel explicite de la
+# langue cible corrige ce glitch stochastique dans la plupart des cas.
+SUJET_SYSTEM_PROMPT_RENFORCE = (
+    SUJET_SYSTEM_PROMPT
+    + " Tu réponds exclusivement en français : aucun caractère chinois,"
+      " japonais, coréen, ni aucun symbole spécial."
+)
 
 # Gabarit de construction de la question à partir du sujet extrait.
 # Mécanique volontairement : la forme de la question ne dépend plus du
@@ -341,20 +351,55 @@ class IterativePipeline:
              forme interrogative ne dépend plus du modèle.
 
         Une demande déjà interrogative (contient « ? ») est conservée
-        telle quelle, sans appel LLM. Repli sur la demande d'origine en
-        cas d'échec : jamais pire.
+        telle quelle, sans appel LLM.
+
+        Extraction en deux chances (v2.7) : le décrochage vers une
+        sortie corrompue est un glitch stochastique du modèle
+        multilingual — une seconde tentative avec consigne renforcée
+        le corrige le plus souvent. Le repli sur la demande d'origine
+        reste le filet final : jamais pire.
         """
         if "?" in query:
             return query
 
+        sujet = self._extraire_sujet(query)
+        if sujet is not None and _sujet_incoherent(sujet):
+            logger.warning(
+                f"query2: sujet incoherent ({sujet[:60]!r}), retry renforce"
+            )
+            sujet = None
+        if sujet is None:
+            sujet = self._extraire_sujet(query, renforce=True)
+            if sujet is not None and _sujet_incoherent(sujet):
+                logger.warning(
+                    f"query2: sujet toujours incoherent au retry ({sujet[:60]!r})"
+                )
+                sujet = None
+        if sujet is None:
+            logger.warning("query2: extraction impossible, demande conservee")
+            return query
+
+        question = QUESTION_TEMPLATE.format(sujet=sujet)
+        logger.info(f"query2: sujet='{sujet[:80]}' -> question='{question[:120]}'")
+        return question
+
+    def _extraire_sujet(self, query: str, renforce: bool = False) -> Optional[str]:
+        """Un appel LLM d'extraction de sujet + nettoyage.
+
+        Retourne le sujet nettoyé, ou None si l'appel a échoué ou si la
+        sortie est structurellement invalide (vide, trop courte, trop
+        longue). La cohérence linguistique (_sujet_incoherent) est
+        jugée par l'appelant, qui décide du retry.
+        """
+        system = SUJET_SYSTEM_PROMPT_RENFORCE if renforce else SUJET_SYSTEM_PROMPT
         try:
             brut = self.analyzer.llm_generator.call_llm(
-                SUJET_SYSTEM_PROMPT,
+                system,
                 SUJET_USER_TEMPLATE.format(query=query),
             )
         except Exception as e:
-            logger.warning(f"query2: echec extraction sujet ({e}), demande conservee")
-            return query
+            logger.warning(f"query2: echec extraction sujet ({e})")
+            return None
 
         sujet = (brut or "").strip().strip('"').strip()
         # Une seule ligne, sans préfixe parasite éventuel ni point final
@@ -362,24 +407,10 @@ class IterativePipeline:
         sujet = re.sub(r"^sujet\s*[:\-]\s*", "", sujet, flags=re.IGNORECASE)
         if not sujet or len(sujet) < 3 or len(sujet) > 120:
             logger.warning(
-                f"query2: sujet extrait invalide ({len(sujet)} car), demande conservee"
+                f"query2: sujet extrait invalide ({len(sujet)} car)"
             )
-            return query
-
-        # Le modèle multilingual produit parfois une sortie corrompue
-        # (caractères d'une autre langue, charabia) sur les demandes
-        # longues : mesuré sur Beaumont Sud le 9 août 2026. Un sujet
-        # corrompu garantit une recherche B et une réponse hors sujet ;
-        # le repli sur la demande d'origine est toujours préférable.
-        if _sujet_incoherent(sujet):
-            logger.warning(
-                f"query2: sujet incoherent ({sujet[:60]!r}), demande conservee"
-            )
-            return query
-
-        question = QUESTION_TEMPLATE.format(sujet=sujet)
-        logger.info(f"query2: sujet='{sujet[:80]}' -> question='{question[:120]}'")
-        return question
+            return None
+        return sujet
 
     # ------------------------------------------------------------------
     # Étape 3 — recherche B à quota réservé
