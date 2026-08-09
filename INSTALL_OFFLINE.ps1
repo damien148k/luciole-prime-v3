@@ -511,11 +511,11 @@ CUDA_VISIBLE_DEVICES=0
 
 
 # Route empruntee par l'interface de chat.
-#   agent      boucle agentique bornee, /api/agent/run
+#   query2     pipeline iteratif, /api/query2 (defaut, mesure 9 aout 2026)
 #   classique  pipeline procedural en une passe, /api/query
-# Voir docs/REDEPLOIEMENT.md. Defaut agent, pour ne rien changer aux
-# instances en place.
-CHAT_ROUTE=agent
+#   agent      boucle agentique v1, /api/agent/run (repli d'urgence)
+# Voir docs/REDEPLOIEMENT.md.
+CHAT_ROUTE=query2
 
 # Auth
 AUTH_SECRET=$secret
