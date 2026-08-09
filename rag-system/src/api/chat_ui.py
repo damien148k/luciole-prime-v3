@@ -41,10 +41,16 @@ SERVICE_NAME = os.environ.get("INSTANCE_NAME", "Luciole")
 
 # Route empruntee par le chat pour repondre.
 #
-#   agent      /api/agent/run, boucle agentique bornee. Comportement en
-#              place depuis le chantier PR C. Valeur par defaut, pour ne
-#              changer le comportement d'aucune instance existante.
+#   query2     /api/query2, pipeline iteratif : recherche classique,
+#              analyse de couverture, question construite par extraction
+#              de sujet, recherche B a quota reserve, generation. Valeur
+#              par defaut. Mesure du 9 aout 2026 sur le jeu mrae : 14/16
+#              reponses substantielles citees contre 7/16 en classique,
+#              zero esquive illegitime, et reponse strictement identique
+#              a la classique quand la couverture est bonne.
 #   classique  /api/query, pipeline procedural en une passe.
+#   agent      /api/agent/run, boucle agentique bornee (v1). Conservee
+#              comme repli d'urgence uniquement.
 #
 # Pourquoi cet interrupteur. Sur le jeu de vingt avis d'autorite
 # environnementale de l'instance mrae, mesure les 5 et 6 aout 2026 sur les
@@ -64,13 +70,13 @@ SERVICE_NAME = os.environ.get("INSTANCE_NAME", "Luciole")
 #     reglage par defaut de l'interface est actif ; la mesure des 5 et 6
 #     aout a ete faite reecriture desactivee, et le reecriveur a ete
 #     retire de la boucle agentique par la PR 30.
-CHAT_ROUTE = os.environ.get("CHAT_ROUTE", "agent").strip().lower()
-if CHAT_ROUTE not in ("agent", "classique"):
+CHAT_ROUTE = os.environ.get("CHAT_ROUTE", "query2").strip().lower()
+if CHAT_ROUTE not in ("query2", "classique", "agent"):
     # loguru n'interpole pas le style pour-cent, d'ou la f-string.
     logger.warning(
-        f"CHAT_ROUTE={CHAT_ROUTE!r} inconnu, valeurs acceptees agent ou "
-        f"classique. Repli sur agent.")
-    CHAT_ROUTE = "agent"
+        f"CHAT_ROUTE={CHAT_ROUTE!r} inconnu, valeurs acceptees query2, "
+        f"classique ou agent. Repli sur query2.")
+    CHAT_ROUTE = "query2"
 
 # Chemin vers les assets statiques (logo + polices offline)
 STATIC_DIR = Path(__file__).parent / "static"
@@ -1317,6 +1323,9 @@ function appliquerRoute(){
       document.getElementById('topKLabel').textContent='30';
     }
     if(note) note.textContent='(pipeline procedural, valeur mesuree 30)';
+  }else if(CHAT_ROUTE==='query2'){
+    sel.disabled=true;
+    if(note) note.textContent='(pipeline iteratif, top_k pilote par le pipeline)';
   }else{
     sel.disabled=true;
     if(note) note.textContent='(non applicable en mode agent)';
@@ -1327,10 +1336,11 @@ function getSettings(){
     customPrompt:document.getElementById('enableCustomPrompt').classList.contains('on')
       ? document.getElementById('customPrompt').value : null,
     topK:parseInt(document.getElementById('topKSelect').value),
-    // En classique, la reecriture est laissee inactive : c'est le reglage
-    // sous lequel le jeu mrae a ete mesure les 5 et 6 aout 2026. En agent,
-    // la valeur est de toute facon abandonnee par le relais.
-    enableRewriting:CHAT_ROUTE!=='classique',
+    // La reecriture n'existe qu'en mode agent. En classique, elle est
+    // laissee inactive : c'est le reglage sous lequel le jeu mrae a ete
+    // mesure les 5 et 6 aout 2026. En query2, l'endpoint l'ignore : le
+    // pipeline fait son propre travail (couverture, requetes ciblees).
+    enableRewriting:CHAT_ROUTE==='agent',
     deepSearch:document.getElementById('enableDeepSearch').classList.contains('on')
   };
 }
@@ -1900,7 +1910,19 @@ async def query(request: ChatRequest):
 
         timeout = 1800.0 if request.deep_search else 1200.0
 
-        if CHAT_ROUTE == "classique":
+        if CHAT_ROUTE == "query2":
+            # Pipeline iteratif : meme contrat QueryRequest cote agent.
+            # enable_rewriting n'est pas transmis, l'endpoint l'ignore.
+            cible = f"{AGENT_URL}/api/query2"
+            charge = {
+                "query": request.query,
+                "index_name": request.index_name,
+                "custom_prompt": request.custom_prompt,
+                "deep_search": request.deep_search,
+                "history": history_list,
+                "top_k": request.top_k,
+            }
+        elif CHAT_ROUTE == "classique":
             cible = f"{AGENT_URL}/api/query"
             charge = {
                 "query": request.query,
