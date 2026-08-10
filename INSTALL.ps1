@@ -548,14 +548,27 @@ docker cp "$PSScriptRoot\setup_bge_model.py" "${agentContainer}:/tmp/setup_bge_m
 # On injecte le magasin complet (racines publiques + racine d'interception) et
 # on le designe via SSL_CERT_FILE (httpx), REQUESTS_CA_BUNDLE (requests) et
 # CURL_CA_BUNDLE (curl) le temps du telechargement des modeles.
+# Implementation 100 % cmdlets + certutil : compatible avec le Constrained
+# Language Mode (AppLocker/WDAC) qui bloque les appels de methodes .NET
+# comme [Convert]::ToBase64String() ou [System.IO.File]::WriteAllLines().
+$caTmpDir = Join-Path $env:TEMP "luciole-roots-export"
+New-Item -ItemType Directory -Force -Path $caTmpDir | Out-Null
 $caPemPath = Join-Path $env:TEMP "luciole-windows-roots.pem"
-$caCerts = Get-ChildItem -Path "Cert:\LocalMachine\Root", "Cert:\CurrentUser\Root" -ErrorAction SilentlyContinue
-$pemLines = foreach ($caCert in $caCerts) {
-    "-----BEGIN CERTIFICATE-----"
-    [Convert]::ToBase64String($caCert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
-    "-----END CERTIFICATE-----"
+if (Test-Path $caPemPath) { Remove-Item $caPemPath -Force }
+$caIndex = 0
+Get-ChildItem -Path "Cert:\LocalMachine\Root", "Cert:\LocalMachine\AuthRoot", "Cert:\CurrentUser\Root" -ErrorAction SilentlyContinue | ForEach-Object {
+    $caIndex++
+    $cerFile = Join-Path $caTmpDir "ca-$caIndex.cer"
+    $pemFile = Join-Path $caTmpDir "ca-$caIndex.pem"
+    try {
+        Export-Certificate -Cert $_ -FilePath $cerFile -Type CERT -Force -ErrorAction Stop | Out-Null
+        & certutil.exe -encode -f $cerFile $pemFile | Out-Null
+        if (Test-Path $pemFile) { Get-Content $pemFile | Add-Content $caPemPath }
+    } catch {
+        # Certificat non exportable : on l'ignore, le bundle reste utilisable.
+    }
 }
-[System.IO.File]::WriteAllLines($caPemPath, $pemLines)
+Remove-Item $caTmpDir -Recurse -Force -ErrorAction SilentlyContinue
 docker cp $caPemPath "${agentContainer}:/tmp/luciole-roots.pem"
 
 $ErrorActionPreference = "Continue"

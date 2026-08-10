@@ -17,6 +17,10 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
   bundle CA de l'hôte ; le bundle est injecté dans le conteneur et désigné
   via `SSL_CERT_FILE` (httpx), `REQUESTS_CA_BUNDLE` (requests) et
   `CURL_CA_BUNDLE` (curl) le temps du téléchargement.
+- **Windows AppLocker/WDAC (Constrained Language Mode)** : l'export des
+  certificats racine utilisait `[Convert]::ToBase64String()`, bloqué en mode
+  de langage contraint. Réécriture avec `Export-Certificate` +
+  `certutil -encode` (cmdlets uniquement, aucun appel de méthode .NET).
 - `INSTALL.ps1` : arrêt net si `docker build` échoue (contrôle de
   `$LASTEXITCODE`) au lieu d'afficher un faux « Image disponible ».
 - Build GPU/CPU/ARM64 : ajout de `download-r2.pytorch.org` (CDN servant
