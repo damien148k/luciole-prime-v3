@@ -5,6 +5,23 @@ Toutes les modifications notables de ce projet sont documentées ici.
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Interception TLS d'entreprise (proxy/antivirus)** : le téléchargement des
+  modèles BGE-M3/reranker (étape 8/9) échouait avec
+  `SSLCertVerificationError` sur `huggingface.co`, le CA racine d'interception
+  étant absent du bundle certifi des conteneurs. `INSTALL.ps1` exporte
+  désormais les certificats racine Windows et `install.sh` réutilise le
+  bundle CA de l'hôte ; le bundle est injecté dans le conteneur et désigné
+  via `SSL_CERT_FILE` (httpx), `REQUESTS_CA_BUNDLE` (requests) et
+  `CURL_CA_BUNDLE` (curl) le temps du téléchargement.
+- `INSTALL.ps1` : arrêt net si `docker build` échoue (contrôle de
+  `$LASTEXITCODE`) au lieu d'afficher un faux « Image disponible ».
+- Build GPU/CPU/ARM64 : ajout de `download-r2.pytorch.org` (CDN servant
+  réellement les wheels torch) aux `--trusted-host` et `PIP_TRUSTED_HOST`.
+
 ## [3.0.0] - 2026-07-18
 
 Fusion de `luciole-prime-v2` (base x86/AMD mono-instance) et

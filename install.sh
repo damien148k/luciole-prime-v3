@@ -468,7 +468,21 @@ sleep 15
 # setup_bge_model.py n'est pas embarque dans l'image Docker (script d'installation,
 # pas du code applicatif) : on l'injecte via docker cp avant de l'executer.
 docker cp "$SCRIPT_DIR/setup_bge_model.py" "${AGENT_CONTAINER}:/tmp/setup_bge_model.py"
-docker exec -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 "$AGENT_CONTAINER" python3 /tmp/setup_bge_model.py \
+
+# En environnement d'entreprise avec interception TLS (proxy/antivirus), le CA
+# racine est installe sur l'hote mais absent du bundle certifi des conteneurs :
+# on reutilise le bundle CA de l'hote pour les telechargements Hugging Face
+# (SSL_CERT_FILE pour httpx, REQUESTS_CA_BUNDLE pour requests, CURL_CA_BUNDLE pour curl).
+CA_ENV=()
+for HOST_CA in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do
+    if [ -f "$HOST_CA" ]; then
+        docker cp "$HOST_CA" "${AGENT_CONTAINER}:/tmp/luciole-roots.pem"
+        CA_ENV=(-e SSL_CERT_FILE=/tmp/luciole-roots.pem -e REQUESTS_CA_BUNDLE=/tmp/luciole-roots.pem -e CURL_CA_BUNDLE=/tmp/luciole-roots.pem)
+        break
+    fi
+done
+
+docker exec -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 "${CA_ENV[@]}" "$AGENT_CONTAINER" python3 /tmp/setup_bge_model.py \
     && ok "BGE-M3 + reranker prets" \
     || warn "Preparation BGE-M3/reranker echouee -- verifiez les logs : docker compose logs agent"
 

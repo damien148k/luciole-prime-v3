@@ -541,8 +541,25 @@ Start-Sleep -Seconds 15
 # et le telechargement du reranker BAAI/bge-reranker-v2-m3 (deja en safetensors).
 docker cp "$PSScriptRoot\setup_bge_model.py" "${agentContainer}:/tmp/setup_bge_model.py"
 
+# Export des certificats racine Windows : en environnement d'entreprise avec
+# interception TLS (proxy/antivirus), le CA racine est present dans le magasin
+# Windows (c'est pourquoi le navigateur fonctionne) mais absent du bundle
+# certifi des conteneurs -- d'ou les SSLCertVerificationError sur huggingface.co.
+# On injecte le magasin complet (racines publiques + racine d'interception) et
+# on le designe via SSL_CERT_FILE (httpx), REQUESTS_CA_BUNDLE (requests) et
+# CURL_CA_BUNDLE (curl) le temps du telechargement des modeles.
+$caPemPath = Join-Path $env:TEMP "luciole-windows-roots.pem"
+$caCerts = Get-ChildItem -Path "Cert:\LocalMachine\Root", "Cert:\CurrentUser\Root" -ErrorAction SilentlyContinue
+$pemLines = foreach ($caCert in $caCerts) {
+    "-----BEGIN CERTIFICATE-----"
+    [Convert]::ToBase64String($caCert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
+    "-----END CERTIFICATE-----"
+}
+[System.IO.File]::WriteAllLines($caPemPath, $pemLines)
+docker cp $caPemPath "${agentContainer}:/tmp/luciole-roots.pem"
+
 $ErrorActionPreference = "Continue"
-docker exec -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 $agentContainer python3 /tmp/setup_bge_model.py
+docker exec -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 -e SSL_CERT_FILE=/tmp/luciole-roots.pem -e REQUESTS_CA_BUNDLE=/tmp/luciole-roots.pem -e CURL_CA_BUNDLE=/tmp/luciole-roots.pem $agentContainer python3 /tmp/setup_bge_model.py
 $bgeExitCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
 
