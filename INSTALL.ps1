@@ -64,6 +64,36 @@ function Test-InstanceName {
     return $Name -match '^[a-z0-9][a-z0-9-]*$'
 }
 
+# Exporte les certificats racine Windows (LocalMachine + CurrentUser) en un
+# bundle PEM. En environnement d'entreprise avec interception TLS (proxy/
+# antivirus), la racine d'interception est dans le magasin Windows (d'ou le
+# navigateur fonctionne) mais absente du bundle certifi des conteneurs.
+# Implementation 100 % cmdlets + certutil : compatible avec le Constrained
+# Language Mode (AppLocker/WDAC) qui bloque les appels de methodes .NET
+# ([Convert]::ToBase64String, [System.IO.File]::WriteAllLines...).
+function Export-WindowsRootCa {
+    param([Parameter(Mandatory = $true)][string]$OutFile)
+
+    $tmpDir = Join-Path $env:TEMP "luciole-roots-export"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    if (Test-Path $OutFile) { Remove-Item $OutFile -Force }
+    $idx = 0
+    Get-ChildItem -Path "Cert:\LocalMachine\Root", "Cert:\LocalMachine\AuthRoot", "Cert:\CurrentUser\Root" -ErrorAction SilentlyContinue | ForEach-Object {
+        $idx++
+        $cerFile = Join-Path $tmpDir "ca-$idx.cer"
+        $pemFile = Join-Path $tmpDir "ca-$idx.pem"
+        try {
+            Export-Certificate -Cert $_ -FilePath $cerFile -Type CERT -Force -ErrorAction Stop | Out-Null
+            & certutil.exe -encode -f $cerFile $pemFile | Out-Null
+            if (Test-Path $pemFile) { Get-Content $pemFile | Add-Content $OutFile }
+        } catch {
+            # Certificat non exportable : on l'ignore, le bundle reste utilisable.
+        }
+    }
+    Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    return (Test-Path $OutFile)
+}
+
 $script:AllocatedPorts = @()
 
 function Get-NextAvailablePort {
@@ -480,6 +510,20 @@ Set-Location $InstancePath
 
 $ollamaService = if ($Profile -eq "cpu") { "ollama-cpu" } else { "ollama" }
 
+# Ecrire le CA d'interception TLS dans ./certs/ollama/ca.crt AVANT le up :
+# le service Ollama le monte dans son store systeme (binaire Go, ignore
+# SSL_CERT_FILE). Sans lui, `ollama pull` echoue en x509 derriere un proxy
+# d'entreprise. On exporte le magasin Windows complet (racines publiques +
+# racine d'interception).
+$ollamaCaDir = Join-Path $InstancePath "certs\ollama"
+New-Item -ItemType Directory -Force -Path $ollamaCaDir | Out-Null
+$ollamaCaFile = Join-Path $ollamaCaDir "ca.crt"
+if (Export-WindowsRootCa -OutFile $ollamaCaFile) {
+    Write-OK "CA d'interception TLS exporte vers certs/ollama/ca.crt"
+} else {
+    Write-Warn "Export du CA impossible : ollama pull pourrait echouer derriere un proxy"
+}
+
 Write-Host "  Demarrage Ollama..."
 docker compose --profile $Profile up -d $ollamaService qdrant opensearch
 
@@ -498,8 +542,17 @@ $modelBase = $model.Split(":")[0]
 if ($ollamaList -match $modelBase) {
     Write-OK "Modele $model deja present (offline)"
 } else {
-    Write-Host "  Telechargement du modele $model (internet requis)..." -ForegroundColor Yellow
+    Write-Host "  Telechargement du modele $model (internet requis, ~9 Go)..." -ForegroundColor Yellow
     docker exec $ollamaContainer ollama pull $model
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [ERREUR] Echec du pull de $model (code $LASTEXITCODE)." -ForegroundColor Red
+        Write-Host "  Sans ce modele l'instance est inutilisable." -ForegroundColor Red
+        Write-Host "  Derriere un proxy d'entreprise : verifiez que certs/ollama/ca.crt est bien"
+        Write-Host "  monte (docker exec $ollamaContainer ls /usr/local/share/ca-certificates/)"
+        Write-Host "  puis relancez : docker exec $ollamaContainer ollama pull $model" -ForegroundColor Red
+        Write-Host ""; Read-Host "Appuyez sur Entree pour quitter"; exit 1
+    }
+    Write-OK "Modele $model telecharge"
 }
 
 # Modele d'embedding RAGAS (answer_relevancy) -- 274 Mo
@@ -541,34 +594,16 @@ Start-Sleep -Seconds 15
 # et le telechargement du reranker BAAI/bge-reranker-v2-m3 (deja en safetensors).
 docker cp "$PSScriptRoot\setup_bge_model.py" "${agentContainer}:/tmp/setup_bge_model.py"
 
-# Export des certificats racine Windows : en environnement d'entreprise avec
-# interception TLS (proxy/antivirus), le CA racine est present dans le magasin
-# Windows (c'est pourquoi le navigateur fonctionne) mais absent du bundle
-# certifi des conteneurs -- d'ou les SSLCertVerificationError sur huggingface.co.
-# On injecte le magasin complet (racines publiques + racine d'interception) et
-# on le designe via SSL_CERT_FILE (httpx), REQUESTS_CA_BUNDLE (requests) et
-# CURL_CA_BUNDLE (curl) le temps du telechargement des modeles.
-# Implementation 100 % cmdlets + certutil : compatible avec le Constrained
-# Language Mode (AppLocker/WDAC) qui bloque les appels de methodes .NET
-# comme [Convert]::ToBase64String() ou [System.IO.File]::WriteAllLines().
-$caTmpDir = Join-Path $env:TEMP "luciole-roots-export"
-New-Item -ItemType Directory -Force -Path $caTmpDir | Out-Null
-$caPemPath = Join-Path $env:TEMP "luciole-windows-roots.pem"
-if (Test-Path $caPemPath) { Remove-Item $caPemPath -Force }
-$caIndex = 0
-Get-ChildItem -Path "Cert:\LocalMachine\Root", "Cert:\LocalMachine\AuthRoot", "Cert:\CurrentUser\Root" -ErrorAction SilentlyContinue | ForEach-Object {
-    $caIndex++
-    $cerFile = Join-Path $caTmpDir "ca-$caIndex.cer"
-    $pemFile = Join-Path $caTmpDir "ca-$caIndex.pem"
-    try {
-        Export-Certificate -Cert $_ -FilePath $cerFile -Type CERT -Force -ErrorAction Stop | Out-Null
-        & certutil.exe -encode -f $cerFile $pemFile | Out-Null
-        if (Test-Path $pemFile) { Get-Content $pemFile | Add-Content $caPemPath }
-    } catch {
-        # Certificat non exportable : on l'ignore, le bundle reste utilisable.
-    }
+# Le bundle CA Windows a deja ete exporte a l'etape 7/9 dans
+# certs/ollama/ca.crt (pour le service Ollama). On le reutilise pour le
+# conteneur agent : httpx (huggingface_hub) honore SSL_CERT_FILE,
+# requests honore REQUESTS_CA_BUNDLE, curl honore CURL_CA_BUNDLE.
+$caPemPath = Join-Path $InstancePath "certs\ollama\ca.crt"
+if (-not (Test-Path $caPemPath)) {
+    Write-Warn "certs/ollama/ca.crt absent : nouvel export du magasin Windows"
+    $caPemPath = Join-Path $env:TEMP "luciole-windows-roots.pem"
+    Export-WindowsRootCa -OutFile $caPemPath | Out-Null
 }
-Remove-Item $caTmpDir -Recurse -Force -ErrorAction SilentlyContinue
 docker cp $caPemPath "${agentContainer}:/tmp/luciole-roots.pem"
 
 $ErrorActionPreference = "Continue"

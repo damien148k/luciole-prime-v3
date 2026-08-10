@@ -9,6 +9,14 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ### Fixed
 
+- **`ollama pull` échouait silencieusement derrière un proxy d'entreprise**
+  (x509 : certificate signed by unknown authority sur `registry.ollama.ai`).
+  Le binaire Go d'Ollama ignore `SSL_CERT_FILE` : le CA d'interception est
+  désormais exporté du magasin Windows dans `certs/ollama/ca.crt` et monté
+  dans le store système du conteneur (`docker-compose.legacy.yml`, services
+  `ollama` et `ollama-cpu`). `INSTALL.ps1` contrôle désormais le code retour
+  du `ollama pull` du LLM principal et s'arrête net avec un message clair
+  au lieu de poursuivre vers une instance inutilisable.
 - **Favicon illisible sur onglets en thème clair** : la luciole blanche sur
   fond transparent était invisible (fond d'onglet gris clair). Nouveau
   `favicon.png` : tuile arrondie en dégradé indigo (`--accent` de l'UI,
