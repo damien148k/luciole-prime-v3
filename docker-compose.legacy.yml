@@ -16,14 +16,16 @@ services:
     - 127.0.0.1:${OLLAMA_PORT:-11434}:11434
     volumes:
     - ./models/ollama:/root/.ollama
-    # CA d'interception TLS d'entreprise (proxy/antivirus). Le service Ollama
-    # (binaire Go) ne lit pas les variables SSL_CERT_FILE : il faut placer la
-    # racine d'interception dans le store systeme du conteneur. INSTALL.ps1
-    # ecrit le PEM exporte de Windows dans ./certs/ollama/ca.crt avant le up.
-    # Le montage est ignore si le fichier est absent (chemin optionnel).
+    # CA d'interception TLS d'entreprise (proxy/antivirus) : INSTALL.ps1
+    # exporte le magasin racine Windows dans ./certs/ollama/ca.crt et ecrit
+    # OLLAMA_CA_BUNDLE dans .env. Go (crypto/x509) honore SSL_CERT_FILE :
+    # il REMPLACE alors le bundle systeme par ce fichier (qui contient les
+    # racines publiques + la racine d'interception). Sans interception,
+    # le defaut pointe vers le bundle systeme standard.
     - ./certs/ollama/ca.crt:/usr/local/share/ca-certificates/luciole-interception.crt:ro
     environment:
     - TZ=${TZ:-Europe/Paris}
+    - SSL_CERT_FILE=${OLLAMA_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}
     - NVIDIA_VISIBLE_DEVICES=all
     - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     - OLLAMA_NUM_PARALLEL=1
@@ -67,6 +69,7 @@ services:
         - ollama
     environment:
     - TZ=${TZ:-Europe/Paris}
+    - SSL_CERT_FILE=${OLLAMA_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}
     - OLLAMA_NUM_PARALLEL=1
     - OLLAMA_MAX_LOADED_MODELS=1
     - OLLAMA_KEEP_ALIVE=60m

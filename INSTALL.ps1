@@ -432,6 +432,12 @@ HF_HUB_OFFLINE=1
 TRANSFORMERS_OFFLINE=1
 CUDA_VISIBLE_DEVICES=0
 
+# CA d'interception TLS (proxy d'entreprise) : bundle exporte du magasin
+# Windows par INSTALL.ps1 dans certs/ollama/ca.crt. Go (crypto/x509) honore
+# SSL_CERT_FILE en REMPLACANT le bundle systeme -- le fichier contient donc
+# toutes les racines publiques + la racine d'interception.
+OLLAMA_CA_BUNDLE=/usr/local/share/ca-certificates/luciole-interception.crt
+
 
 # Route empruntee par l'interface de chat.
 #   query2     pipeline iteratif, /api/query2 (defaut, mesure 9 aout 2026)
@@ -511,10 +517,10 @@ Set-Location $InstancePath
 $ollamaService = if ($Profile -eq "cpu") { "ollama-cpu" } else { "ollama" }
 
 # Ecrire le CA d'interception TLS dans ./certs/ollama/ca.crt AVANT le up :
-# le service Ollama le monte dans son store systeme (binaire Go, ignore
-# SSL_CERT_FILE). Sans lui, `ollama pull` echoue en x509 derriere un proxy
-# d'entreprise. On exporte le magasin Windows complet (racines publiques +
-# racine d'interception).
+# le service Ollama le monte et le designe via SSL_CERT_FILE (Go crypto/x509
+# honore cette variable en remplacant le bundle systeme). Sans lui,
+# `ollama pull` echoue en x509 derriere un proxy d'entreprise. On exporte
+# le magasin Windows complet (racines publiques + racine d'interception).
 $ollamaCaDir = Join-Path $InstancePath "certs\ollama"
 New-Item -ItemType Directory -Force -Path $ollamaCaDir | Out-Null
 $ollamaCaFile = Join-Path $ollamaCaDir "ca.crt"
