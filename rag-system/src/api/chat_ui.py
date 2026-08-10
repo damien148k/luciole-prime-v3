@@ -102,7 +102,15 @@ async def get_logo():
 @app.get("/favicon.ico")
 @app.get("/favicon.png")
 async def get_favicon():
-    """Servir le favicon (même image que le logo)"""
+    """Servir le favicon dedie (tuile indigo lisible sur onglet clair).
+
+    Avant, on servait logo.png : luciole blanche sur fond transparent,
+    invisible dans les onglets en theme clair. favicon.png a desormais son
+    propre visuel ; logo.png reste utilise dans les pages (fond sombre).
+    """
+    favicon_path = STATIC_DIR / "favicon.png"
+    if favicon_path.exists():
+        return FileResponse(favicon_path, media_type="image/png")
     if LOGO_PATH.exists():
         return FileResponse(LOGO_PATH, media_type="image/png")
     alt_path = Path(__file__).parent.parent.parent / "pics" / "luciole-logo.png"

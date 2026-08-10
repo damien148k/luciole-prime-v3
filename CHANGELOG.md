@@ -9,6 +9,14 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ### Fixed
 
+- **Favicon illisible sur onglets en thème clair** : la luciole blanche sur
+  fond transparent était invisible (fond d'onglet gris clair). Nouveau
+  `favicon.png` : tuile arrondie en dégradé indigo (`--accent` de l'UI,
+  #6366f1 → #8b5cf6) portant la luciole blanche, lisible de 16 à 128 px sur
+  fond clair comme sombre. Le Chat UI servait `logo.png` comme favicon ; il
+  sert désormais `favicon.png` en priorité (`logo.png` reste utilisé dans
+  les pages, sur fond sombre).
+
 - **Interception TLS d'entreprise (proxy/antivirus)** : le téléchargement des
   modèles BGE-M3/reranker (étape 8/9) échouait avec
   `SSLCertVerificationError` sur `huggingface.co`, le CA racine d'interception
