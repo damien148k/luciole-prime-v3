@@ -222,6 +222,11 @@ if (-not $imageExists) {
         Write-Host "  Build de $lucioleImage..."
         $dockerfile = if ($Profile -eq "cpu") { "Dockerfile.cpu" } else { "Dockerfile.gpu" }
         docker build -f (Join-Path $PackageDir $dockerfile) -t $lucioleImage (Join-Path $PackageDir "rag-system")
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [ERREUR] Echec du build de $lucioleImage (code $LASTEXITCODE)." -ForegroundColor Red
+            Write-Host "  Corriger l'erreur ci-dessus puis relancer ce script (le cache Docker reprendra au point d'echec)." -ForegroundColor Red
+            Write-Host ""; Read-Host "Appuyez sur Entree pour quitter"; exit 1
+        }
     }
 }
 Write-OK "Image $lucioleImage disponible"
