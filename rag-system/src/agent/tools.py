@@ -10,7 +10,7 @@ Chaque tool est une fonction pure (ou méthode légère) avec :
 Les tools de recherche documentaire réutilisent directement HybridSearch
 (voir retrieval/hybrid.py) avec le paramètre `filters` livré précédemment,
 donc un profil métier peut restreindre par défaut ses recherches
-(ex: {"client": "belacom"}) sans dupliquer de logique de filtrage ici.
+(ex: {"client": "<nom_client>"}) sans dupliquer de logique de filtrage ici.
 
 Aucun tool n'a d'effet de bord irréversible : escalate_to_human se contente
 de marquer la conversation, il n'envoie rien lui-même (l'envoi effectif

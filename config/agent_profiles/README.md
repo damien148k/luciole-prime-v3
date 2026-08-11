@@ -9,14 +9,14 @@ comportement agentique via un profil YAML, sur le même principe que
 | Profil            | Fichier                  | État                          |
 |-------------------|---------------------------|-------------------------------|
 | `generic`         | `generic.yaml`             | Défaut, sans restriction métier |
-| `belacom_support`  | `belacom_support.yaml`     | Support technique Belacom (escalade activée) |
+| `support_technique` | `support_technique.yaml`  | Support technique (escalade activée)        |
 
 ## Mécanisme `AGENT_PROFILE`
 
 Le choix du profil se fait via la variable d'environnement `AGENT_PROFILE` :
 
 ```bash
-AGENT_PROFILE=belacom_support   # ou generic (défaut)
+AGENT_PROFILE=support_technique   # ou generic (défaut)
 ```
 
 Chargement (voir `rag-system/src/agent/agent_profiles.py`) :
@@ -39,7 +39,7 @@ profil par-dessus le dossier de config, sans reconstruire l'image :
 services:
   agent:
     environment:
-      - AGENT_PROFILE=belacom_support
+      - AGENT_PROFILE=support_technique
     volumes:
       - ./config/agent_profiles:/app/config/agent_profiles:ro
 ```
@@ -63,7 +63,7 @@ tools_allowed:                     # voir tools.py pour la liste complète
   - get_document
   - escalate_to_human             # optionnel, selon le métier
   - final_answer
-default_metadata_filters: {}       # ex: {"client": "belacom"}
+default_metadata_filters: {}       # ex: {"client": "<nom_client>"}
 system_prompt: |
   Instructions du planificateur agentique...
 stop_conditions:

@@ -114,7 +114,7 @@ class AgentRunRequest(BaseModel):
     profile: Optional[str] = Field(
         default=None,
         description=(
-            "Nom du profil agentique à utiliser (ex: 'belacom_support'). "
+            "Nom du profil agentique à utiliser (ex: 'support_technique'). "
             "Si omis, utilise le profil actif (variable d'environnement AGENT_PROFILE, "
             "défaut 'generic')."
         )
@@ -895,7 +895,7 @@ async def agent_run(request: AgentRunRequest):
     conditionnelle sont necessaires (voir profils dans config/agent_profiles/).
 
     Args:
-        request.profile: nom du profil agentique (ex: 'belacom_support').
+        request.profile: nom du profil agentique (ex: 'support_technique').
             Si omis, utilise le profil actif (AGENT_PROFILE, defaut 'generic').
         request.index_name: index a interroger (sinon resolu comme pour /api/analyze).
         request.history: historique de conversation, transmis a l'orchestrateur.

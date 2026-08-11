@@ -15,7 +15,7 @@ Un profil déclare :
     max_steps: nombre max d'itérations de la boucle agentique
     tools_allowed: liste des tools autorisés (voir tools.py)
     default_metadata_filters: filtres appliqués par défaut aux recherches
-        (ex: {"client": "belacom"} pour un index multi-client)
+        (ex: {"client": "<nom_client>"} pour un index multi-client)
     system_prompt: prompt système du planificateur
     stop_conditions: {min_sources, require_citation}
     routing_rules: règles de routage optionnelles (non exécutées par ce

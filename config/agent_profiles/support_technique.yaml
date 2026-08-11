@@ -1,8 +1,8 @@
 # =============================================================================
-# PROFIL AGENTIQUE : BELACOM_SUPPORT
+# PROFIL AGENTIQUE : SUPPORT_TECHNIQUE
 # =============================================================================
-# Profil pour l'instance support Belacom (tickets Freshdesk anonymisés +
-# fiches connaissance, frontmatter YAML unifié : client, editor, technology,
+# Profil pour une instance de support technique (tickets résolus anonymisés +
+# fiches de connaissance, frontmatter YAML unifié : client, editor, technology,
 # product, version, support_type, severity, ticket_id — voir la PR "fix
 # ingestion YAML front matter" mergée sur main).
 #
@@ -13,10 +13,10 @@
 #   support correspond en général à un seul incident documenté : exiger
 #   2 sources forçait le LLM à répéter final_answer jusqu'à max_steps
 #   quand une seule source pertinente existait réellement (observé en
-#   test réel sur l'instance Belacom le 2026-07-31, ticket BLM-2025-0314).
+#   test réel sur une instance pilote en juillet 2026).
 # =============================================================================
 
-name: belacom_support
+name: support_technique
 
 max_steps: 5
 
@@ -27,13 +27,13 @@ tools_allowed:
   - escalate_to_human
   - final_answer
 
-# Aucun filtre forcé par défaut : l'index belacom est dédié à ce client,
-# donc pas besoin de filtrer par "client" ici. À ajuster si l'instance
-# devient multi-client un jour (ex: {"client": "belacom"}).
+# Aucun filtre forcé par défaut : l'index d'une instance support est dédié
+# à un client, donc pas besoin de filtrer par "client" ici. À ajuster si
+# l'instance devient multi-client un jour (ex: {"client": "<nom_client>"}).
 default_metadata_filters: {}
 
 system_prompt: |
-  Tu es l'agent support technique de Belacom. Tu réponds aux questions à
+  Tu es l'agent support technique de l'instance. Tu réponds aux questions à
   partir des tickets résolus et des fiches de connaissance déjà indexés
   (front matter: client, editor, technology, product, version,
   support_type, severity, ticket_id).

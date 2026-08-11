@@ -1103,7 +1103,7 @@ class MarkdownParser(BaseParser):
     ni BM25) et devient des champs de premier niveau dans `metadata`, prêts
     à être propagés dans les payloads Qdrant et OpenSearch.
 
-    Champs métier automatiquement remontés (Belacom, WPD, extensibles) :
+    Champs métier automatiquement remontés (support technique, suivi de projet, extensibles) :
       - client, editor, technology, product, version, support_type,
         severity, ticket_id, date
       - projet, phase, thematique, departement

@@ -22,7 +22,7 @@ from .embedder import Embedder
 
 # Champs metier extraits du YAML front matter (MarkdownParser), propages
 # au niveau racine des payloads Qdrant et des documents OpenSearch pour
-# permettre le filtrage direct (editor=fortinet, client=belacom, etc.)
+# permettre le filtrage direct (editor=fortinet, client=<nom_client>, etc.)
 METADATA_FILTERABLE_FIELDS = (
     "client", "editor", "technology", "product", "version",
     "support_type", "severity", "ticket_id", "date",
@@ -224,7 +224,7 @@ class IngestionPipeline:
             logger.info(f"Created Qdrant collection: {collection_name}")
 
             # Payload indexes sur les champs metier (YAML front matter)
-            # pour un filtrage rapide (editor=fortinet, client=belacom, etc.)
+            # pour un filtrage rapide (editor=fortinet, client=<nom_client>, etc.)
             indexed_count = 0
             for field in METADATA_FILTERABLE_FIELDS:
                 if field == "date":
