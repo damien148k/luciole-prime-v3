@@ -101,7 +101,10 @@ Write-Host "Il va telecharger toutes les dependances necessaires."
 Write-Host ""
 
 Assert-Command "docker" "Installez Docker Desktop : https://docs.docker.com/desktop/install/windows-install/"
-Assert-Command "python" "Installez Python 3.11+ : https://www.python.org/downloads/"
+# Python/pip ne sont PAS requis sur l'hote : tous les downloads (HF, wheels)
+# tournent dans des containers python:3.11-slim -- AppLocker/WDAC peut bloquer
+# pip.exe sur l'hote ("Acces refuse") et un conteneur linux/glibc garantit les
+# bonnes wheels manylinux.
 
 # Auto LLM model
 if (-not $LlmModel) {
@@ -366,6 +369,17 @@ docker rm -f $dlContainerName 2>&1 | Out-Null
 
 $ErrorActionPreference = $prevEAP
 
+# Garde-fou : sans les modeles HF, le package offline est inutilisable.
+$embDir = Join-Path $hfCacheDir ("models--" + ($EmbeddingModel -replace "/", "--"))
+$rerDir = Join-Path $hfCacheDir ("models--" + ($RerankerModel -replace "/", "--"))
+if (-not (Test-Path $embDir) -or -not (Test-Path $rerDir)) {
+    Write-Host "  [ERREUR] Modeles HuggingFace incomplets dans $hfCacheDir" -ForegroundColor Red
+    Write-Host "    Embedding : $embDir $(if (Test-Path $embDir) {'OK'} else {'MANQUANT'})" -ForegroundColor Red
+    Write-Host "    Reranker  : $rerDir $(if (Test-Path $rerDir) {'OK'} else {'MANQUANT'})" -ForegroundColor Red
+    Write-Host "  Verifiez la connectivite (proxy/TLS) du container, puis relancez." -ForegroundColor Red
+    Read-Host "Appuyez sur Entree pour quitter"; exit 1
+}
+
 Write-Host "  [OK] Modeles HuggingFace telecharges (symlinks resolus)" -ForegroundColor Green
 
 # ============================================================================
@@ -383,10 +397,34 @@ $reqFile = if ($Profile -eq "cpu") {
     "rag-system\setup\requirements-linux-gpu.txt"
 }
 
+# Les downloads tournent dans un container python:3.11-slim (et non via le pip
+# de l'hote) pour deux raisons :
+#  - AppLocker/WDAC peut bloquer pip.exe sur l'hote ("Acces refuse")
+#  - le container est deja en linux/glibc python 3.11 : wheels natives garanties
+# Le CA d'interception (etape 4/7) est monte pour pip (REQUESTS_CA_BUNDLE).
+$pipContainerName = "luciole-offline-pip"
+$ErrorActionPreference = "Continue"
+docker rm -f $pipContainerName 2>&1 | Out-Null
+$ErrorActionPreference = "Stop"
+
+Write-Host "  Demarrage d'un container python:3.11-slim pour les downloads..."
+if (Test-Path $ollamaCaFile) {
+    docker run -d --name $pipContainerName `
+        -v "${pipDir}:/output" `
+        -v "${ollamaCaFile}:/usr/local/share/ca-certificates/luciole-interception.crt:ro" `
+        -e SSL_CERT_FILE=/usr/local/share/ca-certificates/luciole-interception.crt `
+        -e REQUESTS_CA_BUNDLE=/usr/local/share/ca-certificates/luciole-interception.crt `
+        python:3.11-slim sleep 3600 | Out-Null
+} else {
+    docker run -d --name $pipContainerName -v "${pipDir}:/output" python:3.11-slim sleep 3600 | Out-Null
+}
+
+$reqFileAbs = Join-Path $PSScriptRoot $reqFile
 Write-Host "  Telechargement des wheels depuis $reqFile..."
 Write-Host "  (plateforme cible : linux, python 3.11)"
+docker cp $reqFileAbs "${pipContainerName}:/tmp/requirements.txt"
 $ErrorActionPreference = "Continue"
-pip download -r $reqFile -d $pipDir --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | ForEach-Object { if ($_ -notmatch "^(WARNING|ERROR)") { Write-Host "  $_" } }
+docker exec $pipContainerName pip download --root-user-action=ignore -r /tmp/requirements.txt -d /output --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | ForEach-Object { if ($_ -notmatch "^(WARNING|ERROR)") { Write-Host "  $_" } }
 
 # Torch separement (gros fichiers)
 # torch>=2.6 requis par transformers>=4.52 suite a CVE-2025-32434.
@@ -395,32 +433,38 @@ pip download -r $reqFile -d $pipDir --platform manylinux2014_x86_64 --python-ver
 # par les proxys d'entreprise (cf. Dockerfile.gpu). On l'ajoute en trusted-host.
 if ($Profile -eq "cpu") {
     Write-Host "  Telechargement PyTorch CPU (torch==2.6.0)..."
-    pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d $pipDir --index-url https://download.pytorch.org/whl/cpu --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
+    docker exec $pipContainerName pip download --root-user-action=ignore 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d /output --index-url https://download.pytorch.org/whl/cpu --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
 } else {
     Write-Host "  Telechargement PyTorch CUDA 12.4 (torch==2.6.0)..."
-    pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d $pipDir --index-url https://download.pytorch.org/whl/cu124 --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
+    docker exec $pipContainerName pip download --root-user-action=ignore 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d /output --index-url https://download.pytorch.org/whl/cu124 --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
 }
 $ErrorActionPreference = "Stop"
 
 $wheelCount = (Get-ChildItem -Path $pipDir -Filter "*.whl" | Measure-Object).Count
+if ($wheelCount -eq 0) {
+    docker rm -f $pipContainerName 2>&1 | Out-Null
+    Write-Host "  [ERREUR] Aucun wheel telecharge : verifier la connectivite (proxy/TLS) du container." -ForegroundColor Red
+    Read-Host "Appuyez sur Entree pour quitter"; exit 1
+}
 Write-Host "  [OK] $wheelCount wheels telecharges" -ForegroundColor Green
 
 # Copier le requirements dans pip_packages (necessaire pour Dockerfile.*.offline)
-Copy-Item -Path $reqFile -Destination $pipDir -Force
+Copy-Item -Path $reqFileAbs -Destination $pipDir -Force
 Write-Host "  [OK] $reqFile copie dans pip_packages" -ForegroundColor Green
 
 # Telecharger les wheels du module mail (cryptography + cffi) pour installation offline
 # dans le container feedback sans acces internet
 Write-Host "  Telechargement wheels module mail (cryptography, cffi)..."
 $ErrorActionPreference = "Continue"
-pip download cryptography==42.0.8 cffi==1.16.0 `
-    --dest $pipDir `
+docker exec $pipContainerName pip download --root-user-action=ignore cryptography==42.0.8 cffi==1.16.0 `
+    --dest /output `
     --platform manylinux2014_x86_64 `
     --python-version 311 `
     --only-binary=:all: `
     --no-deps `
     --quiet 2>&1 | Out-Null
 $ErrorActionPreference = "Stop"
+docker rm -f $pipContainerName 2>&1 | Out-Null
 $mailWheels = (Get-ChildItem -Path $pipDir -Filter "cryptography*.whl" | Measure-Object).Count
 if ($mailWheels -gt 0) {
     Write-Host "  [OK] Wheels cryptography/cffi telecharges pour le module mail" -ForegroundColor Green

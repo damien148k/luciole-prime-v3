@@ -16,6 +16,12 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ### Fixed
 
+- **`PREPARE_OFFLINE.ps1` étape 6/7 : `pip.exe` bloqué par AppLocker/WDAC**
+  ("Accès refusé"). Les `pip download` (wheels, torch, cryptography/cffi)
+  tournent désormais dans un conteneur `python:3.11-slim` (CA monté), ce qui
+  contourne le blocage hôte et garantit des wheels manylinux natives. Python
+  n'est plus requis sur l'hôte (`Assert-Command python` retiré). Garde-fous
+  ajoutés : arrêt net si 0 wheel ou si les modèles HF sont incomplets.
 - **`PREPARE_OFFLINE.ps1` échouait derrière un proxy d'entreprise** : le
   conteneur Ollama temporaire (`ollama pull`) et le conteneur de
   téléchargement HuggingFace (`pip` + `huggingface_hub`) montent désormais le
