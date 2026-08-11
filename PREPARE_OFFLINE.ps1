@@ -424,7 +424,7 @@ Write-Host "  Telechargement des wheels depuis $reqFile..."
 Write-Host "  (plateforme cible : linux, python 3.11)"
 docker cp $reqFileAbs "${pipContainerName}:/tmp/requirements.txt"
 $ErrorActionPreference = "Continue"
-docker exec $pipContainerName pip download --root-user-action=ignore -r /tmp/requirements.txt -d /output --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | ForEach-Object { if ($_ -notmatch "^(WARNING|ERROR)") { Write-Host "  $_" } }
+docker exec $pipContainerName pip download -r /tmp/requirements.txt -d /output --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | ForEach-Object { if ($_ -notmatch "^(WARNING|ERROR)") { Write-Host "  $_" } }
 
 # Torch separement (gros fichiers)
 # torch>=2.6 requis par transformers>=4.52 suite a CVE-2025-32434.
@@ -433,10 +433,10 @@ docker exec $pipContainerName pip download --root-user-action=ignore -r /tmp/req
 # par les proxys d'entreprise (cf. Dockerfile.gpu). On l'ajoute en trusted-host.
 if ($Profile -eq "cpu") {
     Write-Host "  Telechargement PyTorch CPU (torch==2.6.0)..."
-    docker exec $pipContainerName pip download --root-user-action=ignore 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d /output --index-url https://download.pytorch.org/whl/cpu --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
+    docker exec $pipContainerName pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d /output --index-url https://download.pytorch.org/whl/cpu --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
 } else {
     Write-Host "  Telechargement PyTorch CUDA 12.4 (torch==2.6.0)..."
-    docker exec $pipContainerName pip download --root-user-action=ignore 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d /output --index-url https://download.pytorch.org/whl/cu124 --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
+    docker exec $pipContainerName pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d /output --index-url https://download.pytorch.org/whl/cu124 --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
 }
 $ErrorActionPreference = "Stop"
 
@@ -456,7 +456,7 @@ Write-Host "  [OK] $reqFile copie dans pip_packages" -ForegroundColor Green
 # dans le container feedback sans acces internet
 Write-Host "  Telechargement wheels module mail (cryptography, cffi)..."
 $ErrorActionPreference = "Continue"
-docker exec $pipContainerName pip download --root-user-action=ignore cryptography==42.0.8 cffi==1.16.0 `
+docker exec $pipContainerName pip download cryptography==42.0.8 cffi==1.16.0 `
     --dest /output `
     --platform manylinux2014_x86_64 `
     --python-version 311 `
