@@ -68,30 +68,40 @@ function Test-InstanceName {
 # bundle PEM. En environnement d'entreprise avec interception TLS (proxy/
 # antivirus), la racine d'interception est dans le magasin Windows (d'ou le
 # navigateur fonctionne) mais absente du bundle certifi des conteneurs.
-# Implementation 100 % cmdlets + certutil : compatible avec le Constrained
-# Language Mode (AppLocker/WDAC) qui bloque les appels de methodes .NET
-# ([Convert]::ToBase64String, [System.IO.File]::WriteAllLines...).
+# Implementation 100 % PowerShell managed : plus de dependance a
+# certutil.exe, bloque par AppLocker/WDAC en entreprise (cause d'echecs
+# silencieux). Compatible Constrained Language Mode..
 function Export-WindowsRootCa {
     param([Parameter(Mandatory = $true)][string]$OutFile)
 
+    # Conversion DER -> PEM en PowerShell managed (sans certutil.exe) :
+    # certutil est frequemment bloque par AppLocker/WDAC en entreprise, ce
+    # qui faisait echouer silencieusement chaque conversion (catch generique)
+    # et produisait un bundle vide ou absent. Export-Certificate exporte le
+    # DER sur disque, on le relit en bytes puis on encode en Base64 avec
+    # retours a la ligne PEM (64 colonnes).
+    if (Test-Path $OutFile) { Remove-Item $OutFile -Force }
     $tmpDir = Join-Path $env:TEMP "luciole-roots-export"
     New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
-    if (Test-Path $OutFile) { Remove-Item $OutFile -Force }
     $idx = 0
     Get-ChildItem -Path "Cert:\LocalMachine\Root", "Cert:\LocalMachine\AuthRoot", "Cert:\CurrentUser\Root" -ErrorAction SilentlyContinue | ForEach-Object {
         $idx++
         $cerFile = Join-Path $tmpDir "ca-$idx.cer"
-        $pemFile = Join-Path $tmpDir "ca-$idx.pem"
         try {
             Export-Certificate -Cert $_ -FilePath $cerFile -Type CERT -Force -ErrorAction Stop | Out-Null
-            & certutil.exe -encode -f $cerFile $pemFile | Out-Null
-            if (Test-Path $pemFile) { Get-Content $pemFile | Add-Content $OutFile }
+            $der = [System.IO.File]::ReadAllBytes($cerFile)
+            $b64 = [Convert]::ToBase64String($der)
+            $lines = for ($i = 0; $i -lt $b64.Length; $i += 64) {
+                $b64.Substring($i, [Math]::Min(64, $b64.Length - $i))
+            }
+            $pem = @("-----BEGIN CERTIFICATE-----") + $lines + @("-----END CERTIFICATE-----")
+            [System.IO.File]::AppendAllText($OutFile, ($pem -join "`n") + "`n")
         } catch {
             # Certificat non exportable : on l'ignore, le bundle reste utilisable.
         }
     }
     Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-    return (Test-Path $OutFile)
+    return ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 0))
 }
 
 $script:AllocatedPorts = @()

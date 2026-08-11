@@ -16,6 +16,16 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ### Fixed
 
+- **`Export-WindowsRootCa` produisait un bundle CA vide/absent en entreprise**
+  (`PREPARE_OFFLINE.ps1`, `INSTALL.ps1`, `INSTALL_OFFLINE.ps1`) : la
+  conversion DER→PEM passait par `certutil.exe`, lui aussi bloqué par
+  AppLocker/WDAC. Chaque certificat échouait silencieusement dans le `catch`,
+  le fichier `certs/ollama/ca.crt` n'était jamais créé, et les conteneurs de
+  téléchargement (pip, ollama, HF) tournaient sans la racine d'interception
+  TLS → échec `CERTIFICATE_VERIFY_FAILED` sur les domaines interceptés (ex:
+  `download.pytorch.org`). La conversion est désormais 100 % PowerShell
+  managed (`[Convert]::ToBase64String`), sans dépendance à `certutil.exe`, et
+  la fonction vérifie que le bundle est non vide avant de retourner succès.
 - **`PREPARE_OFFLINE.ps1` étape 6/7 : `pip.exe` bloqué par AppLocker/WDAC**
   ("Accès refusé"). Les `pip download` (wheels, torch, cryptography/cffi)
   tournent désormais dans un conteneur `python:3.11-slim` (CA monté), ce qui
