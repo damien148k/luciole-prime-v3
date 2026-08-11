@@ -7,7 +7,27 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ## [Unreleased]
 
+### Added
+
+- **`BACKUP.ps1` / `RESTORE.ps1`** : sauvegarde et restauration automatisées
+  d'une instance (dossier d'instance, volumes nommés Qdrant/OpenSearch,
+  images Docker en option `-IncludeImages`). CLM-compatibles (cmdlets +
+  docker uniquement). Voir `docs/SAUVEGARDE.md`.
+
 ### Fixed
+
+- **`PREPARE_OFFLINE.ps1` échouait derrière un proxy d'entreprise** : le
+  conteneur Ollama temporaire (`ollama pull`) et le conteneur de
+  téléchargement HuggingFace (`pip` + `huggingface_hub`) montent désormais le
+  CA d'interception exporté du magasin Windows via `SSL_CERT_FILE` /
+  `REQUESTS_CA_BUNDLE`. Le `pip download` de PyTorch ajoute
+  `--trusted-host download-r2.pytorch.org`. Le modèle RAGAS pré-téléchargé
+  est corrigé de `qwen2.5:7b` vers `nomic-embed-text` (cohérence avec
+  `INSTALL.ps1`). Une violation du Constrained Language Mode
+  (`[System.IO.File]::WriteAllText`) est remplacée par `Set-Content`.
+- **`INSTALL_OFFLINE.ps1`** : écrit désormais `certs/ollama/ca.crt` +
+  `OLLAMA_CA_BUNDLE` dans `.env` pour une cible derrière proxy (un
+  `ollama pull` ultérieur échouerait sinon en x509).
 
 - **`ollama pull` échouait silencieusement derrière un proxy d'entreprise**
   (x509 : certificate signed by unknown authority sur `registry.ollama.ai`).

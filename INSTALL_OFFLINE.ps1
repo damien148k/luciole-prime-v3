@@ -46,6 +46,35 @@ function Test-InstanceName {
     return $Name -match '^[a-z0-9][a-z0-9-]*$'
 }
 
+# Exporte les certificats racine Windows (LocalMachine + CurrentUser) en un
+# bundle PEM. En environnement d'entreprise avec interception TLS (proxy/
+# antivirus), la racine d'interception est dans le magasin Windows (d'ou le
+# navigateur fonctionne) mais absente du bundle certifi des conteneurs.
+# Implementation 100 % cmdlets + certutil : compatible avec le Constrained
+# Language Mode (AppLocker/WDAC) qui bloque les appels de methodes .NET.
+function Export-WindowsRootCa {
+    param([Parameter(Mandatory = $true)][string]$OutFile)
+
+    $tmpDir = Join-Path $env:TEMP "luciole-roots-export"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    if (Test-Path $OutFile) { Remove-Item $OutFile -Force }
+    $idx = 0
+    Get-ChildItem -Path "Cert:\LocalMachine\Root", "Cert:\LocalMachine\AuthRoot", "Cert:\CurrentUser\Root" -ErrorAction SilentlyContinue | ForEach-Object {
+        $idx++
+        $cerFile = Join-Path $tmpDir "ca-$idx.cer"
+        $pemFile = Join-Path $tmpDir "ca-$idx.pem"
+        try {
+            Export-Certificate -Cert $_ -FilePath $cerFile -Type CERT -Force -ErrorAction Stop | Out-Null
+            & certutil.exe -encode -f $cerFile $pemFile | Out-Null
+            if (Test-Path $pemFile) { Get-Content $pemFile | Add-Content $OutFile }
+        } catch {
+            # Certificat non exportable : on l'ignore, le bundle reste utilisable.
+        }
+    }
+    Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    return (Test-Path $OutFile)
+}
+
 $script:AllocatedPorts = @()
 
 function Get-NextAvailablePort {
@@ -523,6 +552,22 @@ AUTH_SECRET=$secret
 
 Set-Content -Path "$InstancePath\.env" -Value $envContent -Encoding UTF8
 Write-OK "Fichier .env genere"
+
+# CA d'interception TLS (proxy d'entreprise) : le service Ollama monte
+# certs/ollama/ca.crt et le designe via OLLAMA_CA_BUNDLE (Go crypto/x509
+# honore SSL_CERT_FILE). Meme si l'installation est offline, Ollama devra
+# parfois re-telecharger un modele (pull manuel, mise a jour) ; sans ce CA,
+# `ollama pull` echouerait en x509 derriere un proxy. On ecrit le fichier
+# exporte du magasin Windows et on ajoute la variable au .env.
+$ollamaCaDir = Join-Path $InstancePath "certs\ollama"
+New-Item -ItemType Directory -Force -Path $ollamaCaDir | Out-Null
+$ollamaCaFile = Join-Path $ollamaCaDir "ca.crt"
+if (Export-WindowsRootCa -OutFile $ollamaCaFile) {
+    Add-Content -Path "$InstancePath\.env" -Value "OLLAMA_CA_BUNDLE=/usr/local/share/ca-certificates/luciole-interception.crt"
+    Write-OK "CA d'interception TLS exporte (certs/ollama/ca.crt) + OLLAMA_CA_BUNDLE"
+} else {
+    Write-Warn "Export du CA impossible : ollama pull pourrait echouer derriere un proxy"
+}
 
 # ============================================================================
 # ETAPE 6 : Authentification

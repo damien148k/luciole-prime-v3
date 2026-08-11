@@ -58,6 +58,35 @@ function Assert-Command {
     }
 }
 
+# Exporte les certificats racine Windows (LocalMachine + CurrentUser) en un
+# bundle PEM. En environnement d'entreprise avec interception TLS (proxy/
+# antivirus), la racine d'interception est dans le magasin Windows (d'ou le
+# navigateur fonctionne) mais absente du bundle certifi des conteneurs.
+# Implementation 100 % cmdlets + certutil : compatible avec le Constrained
+# Language Mode (AppLocker/WDAC) qui bloque les appels de methodes .NET.
+function Export-WindowsRootCa {
+    param([Parameter(Mandatory = $true)][string]$OutFile)
+
+    $tmpDir = Join-Path $env:TEMP "luciole-roots-export"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    if (Test-Path $OutFile) { Remove-Item $OutFile -Force }
+    $idx = 0
+    Get-ChildItem -Path "Cert:\LocalMachine\Root", "Cert:\LocalMachine\AuthRoot", "Cert:\CurrentUser\Root" -ErrorAction SilentlyContinue | ForEach-Object {
+        $idx++
+        $cerFile = Join-Path $tmpDir "ca-$idx.cer"
+        $pemFile = Join-Path $tmpDir "ca-$idx.pem"
+        try {
+            Export-Certificate -Cert $_ -FilePath $cerFile -Type CERT -Force -ErrorAction Stop | Out-Null
+            & certutil.exe -encode -f $cerFile $pemFile | Out-Null
+            if (Test-Path $pemFile) { Get-Content $pemFile | Add-Content $OutFile }
+        } catch {
+            # Certificat non exportable : on l'ignore, le bundle reste utilisable.
+        }
+    }
+    Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    return (Test-Path $OutFile)
+}
+
 # ============================================================================
 # Verifications
 # ============================================================================
@@ -213,17 +242,36 @@ docker rm -f $containerName 2>&1 | Out-Null
 $ErrorActionPreference = "Stop"
 
 Write-Host "  Demarrage container Ollama temporaire..."
-docker run -d --name $containerName -v "${ollamaModelDir}:/root/.ollama" ollama/ollama:latest
+
+# CA d'interception TLS (proxy d'entreprise) : le binaire Go d'Ollama honore
+# SSL_CERT_FILE. On exporte le magasin racine Windows (racines publiques +
+# racine d'interception) et on le monte/designe dans le container, sinon
+# `ollama pull` echoue en x509 derriere un proxy. Sans interception, ce
+# fichier est inoffensif (bundle standard + racine d'interception en plus).
+$ollamaCaDir = Join-Path $OutputDir "certs\ollama"
+New-Item -ItemType Directory -Force -Path $ollamaCaDir | Out-Null
+$ollamaCaFile = Join-Path $ollamaCaDir "ca.crt"
+if (Export-WindowsRootCa -OutFile $ollamaCaFile) {
+    Write-Host "  CA d'interception TLS exporte (certs/ollama/ca.crt)" -ForegroundColor Gray
+    docker run -d --name $containerName `
+        -v "${ollamaModelDir}:/root/.ollama" `
+        -v "${ollamaCaFile}:/usr/local/share/ca-certificates/luciole-interception.crt:ro" `
+        -e SSL_CERT_FILE=/usr/local/share/ca-certificates/luciole-interception.crt `
+        ollama/ollama:latest
+} else {
+    Write-Warn "Export du CA impossible : ollama pull pourrait echouer derriere un proxy"
+    docker run -d --name $containerName -v "${ollamaModelDir}:/root/.ollama" ollama/ollama:latest
+}
 Start-Sleep -Seconds 10
 
 Write-Host "  Telechargement de $LlmModel (peut prendre plusieurs minutes)..."
 docker exec $containerName ollama pull $LlmModel
 
-# Si profil GPU, telecharger aussi le modele RAGAS (plus leger)
-$ragasModel = "qwen2.5:7b"
-if ($LlmModel -ne $ragasModel) {
-    Write-Host "  Telechargement du modele RAGAS : $ragasModel..."
-    docker exec $containerName ollama pull $ragasModel
+# Modele d'embedding RAGAS (answer_relevancy) -- aligne sur INSTALL.ps1
+$ragasEmbed = "nomic-embed-text"
+if ($LlmModel -ne $ragasEmbed) {
+    Write-Host "  Telechargement du modele embedding RAGAS : $ragasEmbed..."
+    docker exec $containerName ollama pull $ragasEmbed
 }
 
 Write-Host "  Nettoyage container temporaire..."
@@ -253,10 +301,24 @@ $ErrorActionPreference = "Continue"
 docker rm -f $dlContainerName 2>&1 | Out-Null
 
 Write-Host "  Demarrage d'un container pour telecharger les modeles..."
-docker run -d --name $dlContainerName `
-    -v "${hfCacheDir}:/output" `
-    python:3.11-slim `
-    sleep 3600 2>&1 | ForEach-Object { Write-Host "  $_" }
+# Le CA exporte a l'etape 4/7 est reutilise : pip (REQUESTS_CA_BUNDLE) et
+# huggingface_hub/httpx (SSL_CERT_FILE) en ont besoin derriere un proxy
+# d'interception TLS, sinon x509 / SSLCertVerificationError.
+if (Test-Path $ollamaCaFile) {
+    docker run -d --name $dlContainerName `
+        -v "${hfCacheDir}:/output" `
+        -v "${ollamaCaFile}:/usr/local/share/ca-certificates/luciole-interception.crt:ro" `
+        -e SSL_CERT_FILE=/usr/local/share/ca-certificates/luciole-interception.crt `
+        -e REQUESTS_CA_BUNDLE=/usr/local/share/ca-certificates/luciole-interception.crt `
+        -e CURL_CA_BUNDLE=/usr/local/share/ca-certificates/luciole-interception.crt `
+        python:3.11-slim `
+        sleep 3600 2>&1 | ForEach-Object { Write-Host "  $_" }
+} else {
+    docker run -d --name $dlContainerName `
+        -v "${hfCacheDir}:/output" `
+        python:3.11-slim `
+        sleep 3600 2>&1 | ForEach-Object { Write-Host "  $_" }
+}
 
 Write-Host "  Installation de sentence-transformers dans le container..."
 docker exec $dlContainerName pip install --root-user-action=ignore sentence-transformers 2>&1 | ForEach-Object {
@@ -284,7 +346,10 @@ $pyContent = @(
     ""
     "print('Tous les modeles HuggingFace sont telecharges.')"
 ) -join "`n"
-[System.IO.File]::WriteAllText($pyTmpFile, $pyContent, [System.Text.UTF8Encoding]::new($false))
+# Set-Content (et non [System.IO.File]::WriteAllText) : compatible avec le
+# Constrained Language Mode (AppLocker/WDAC). Le BOM UTF-8 de PS 5.1 est
+# accepte par python3 (utf-8-sig).
+Set-Content -Path $pyTmpFile -Value $pyContent -Encoding UTF8
 
 docker cp $pyTmpFile "${dlContainerName}:/tmp/dl_models.py" 2>&1 | Out-Null
 Remove-Item $pyTmpFile -ErrorAction SilentlyContinue
@@ -326,12 +391,14 @@ pip download -r $reqFile -d $pipDir --platform manylinux2014_x86_64 --python-ver
 # Torch separement (gros fichiers)
 # torch>=2.6 requis par transformers>=4.52 suite a CVE-2025-32434.
 # cu124 est la seule fenetre x86_64 qui livre torch 2.6.0 en wheels binaires.
+# Les wheels torch sont servies depuis le CDN download-r2.pytorch.org, intercepte
+# par les proxys d'entreprise (cf. Dockerfile.gpu). On l'ajoute en trusted-host.
 if ($Profile -eq "cpu") {
     Write-Host "  Telechargement PyTorch CPU (torch==2.6.0)..."
-    pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d $pipDir --index-url https://download.pytorch.org/whl/cpu --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
+    pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d $pipDir --index-url https://download.pytorch.org/whl/cpu --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
 } else {
     Write-Host "  Telechargement PyTorch CUDA 12.4 (torch==2.6.0)..."
-    pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d $pipDir --index-url https://download.pytorch.org/whl/cu124 --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
+    pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d $pipDir --index-url https://download.pytorch.org/whl/cu124 --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
 }
 $ErrorActionPreference = "Stop"
 
