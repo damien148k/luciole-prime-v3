@@ -419,26 +419,49 @@ if (Test-Path $ollamaCaFile) {
     docker run -d --name $pipContainerName -v "${pipDir}:/output" python:3.11-slim sleep 3600 | Out-Null
 }
 
+# pip 24.0 (python:3.11-slim) est lent et fragile en resolution de
+# dependances (backtracking infini sur extract-msg/rich/typer). On le met a
+# niveau avant tout download. On NE PASSE PAS --platform : le conteneur est
+# deja linux x86_64 / python 3.11, pip resout nativement les wheels
+# manylinux_2_17 / manylinux_2_28 (que --platform manylinux2014 exclurait).
+Write-Host "  Mise a niveau de pip dans le container..."
+docker exec $pipContainerName pip install --quiet --upgrade pip 2>&1 | Out-Null
+
 $reqFileAbs = Join-Path $PSScriptRoot $reqFile
 Write-Host "  Telechargement des wheels depuis $reqFile..."
-Write-Host "  (plateforme cible : linux, python 3.11)"
+Write-Host "  (plateforme cible : linux x86_64, python 3.11 -- resolution native)"
 docker cp $reqFileAbs "${pipContainerName}:/tmp/requirements.txt"
 $ErrorActionPreference = "Continue"
-docker exec $pipContainerName pip download -r /tmp/requirements.txt -d /output --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | ForEach-Object { if ($_ -notmatch "^(WARNING|ERROR)") { Write-Host "  $_" } }
+docker exec $pipContainerName pip download -r /tmp/requirements.txt -d /output --only-binary=:all: 2>&1 | ForEach-Object { if ($_ -notmatch "^(WARNING|ERROR)") { Write-Host "  $_" } }
+$reqExit = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($reqExit -ne 0) {
+    docker rm -f $pipContainerName 2>&1 | Out-Null
+    Write-Host "  [ERREUR] pip download a echoue (code $reqExit) sur $reqFile." -ForegroundColor Red
+    Write-Host "  Verifiez la connectivite (proxy/TLS) du container et la resolution des dependances." -ForegroundColor Red
+    Read-Host "Appuyez sur Entree pour quitter"; exit 1
+}
 
 # Torch separement (gros fichiers)
 # torch>=2.6 requis par transformers>=4.52 suite a CVE-2025-32434.
 # cu124 est la seule fenetre x86_64 qui livre torch 2.6.0 en wheels binaires.
 # Les wheels torch sont servies depuis le CDN download-r2.pytorch.org, intercepte
 # par les proxys d'entreprise (cf. Dockerfile.gpu). On l'ajoute en trusted-host.
+$ErrorActionPreference = "Continue"
 if ($Profile -eq "cpu") {
     Write-Host "  Telechargement PyTorch CPU (torch==2.6.0)..."
-    docker exec $pipContainerName pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d /output --index-url https://download.pytorch.org/whl/cpu --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
+    docker exec $pipContainerName pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d /output --index-url https://download.pytorch.org/whl/cpu --trusted-host download-r2.pytorch.org --only-binary=:all: 2>&1 | Out-Null
 } else {
     Write-Host "  Telechargement PyTorch CUDA 12.4 (torch==2.6.0)..."
-    docker exec $pipContainerName pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d /output --index-url https://download.pytorch.org/whl/cu124 --trusted-host download-r2.pytorch.org --platform manylinux2014_x86_64 --python-version 3.11 --only-binary=:all: 2>&1 | Out-Null
+    docker exec $pipContainerName pip download 'torch==2.6.0' 'torchvision==0.21.0' 'torchaudio==2.6.0' -d /output --index-url https://download.pytorch.org/whl/cu124 --trusted-host download-r2.pytorch.org --only-binary=:all: 2>&1 | Out-Null
 }
+$torchExit = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
+if ($torchExit -ne 0) {
+    docker rm -f $pipContainerName 2>&1 | Out-Null
+    Write-Host "  [ERREUR] Telechargement PyTorch echoue (code $torchExit)." -ForegroundColor Red
+    Read-Host "Appuyez sur Entree pour quitter"; exit 1
+}
 
 $wheelCount = (Get-ChildItem -Path $pipDir -Filter "*.whl" | Measure-Object).Count
 if ($wheelCount -eq 0) {
@@ -458,8 +481,6 @@ Write-Host "  Telechargement wheels module mail (cryptography, cffi)..."
 $ErrorActionPreference = "Continue"
 docker exec $pipContainerName pip download cryptography==42.0.8 cffi==1.16.0 `
     --dest /output `
-    --platform manylinux2014_x86_64 `
-    --python-version 311 `
     --only-binary=:all: `
     --no-deps `
     --quiet 2>&1 | Out-Null
