@@ -395,7 +395,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - nc -z localhost 3025 && nc -z localhost 3143 || exit 1
+      - bash -c 'echo > /dev/tcp/localhost/3025' && bash -c 'echo > /dev/tcp/localhost/3143' || exit 1
       interval: 20s
       timeout: 5s
       retries: 5
