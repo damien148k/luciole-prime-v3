@@ -43,6 +43,11 @@ WORKDIR /app
 
 COPY setup/requirements-linux-gpu.txt ./requirements.txt
 
+# pip 22.0.2 (Ubuntu 22.04) plante avec AssertionError dans le resolveur
+# (get_topological_weights) sur les gros arbres de dependances : maj prealable.
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    --trusted-host pypi.org --trusted-host files.pythonhosted.org
+
 # torch>=2.6.0 requis par transformers>=4.52 suite a CVE-2025-32434.
 # cu124 est la seule fenetre publique x86_64 qui livre torch 2.6.0 en wheels binaires.
 RUN pip install --no-cache-dir --trusted-host download.pytorch.org --trusted-host download-r2.pytorch.org --trusted-host pypi.org --trusted-host files.pythonhosted.org --trusted-host pypi.nvidia.com \
