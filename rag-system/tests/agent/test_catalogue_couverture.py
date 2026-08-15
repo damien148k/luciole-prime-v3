@@ -24,6 +24,9 @@ from src.agent.iterative import (  # noqa: E402
     COVERAGE_USER_TEMPLATE_CATALOGUE,
     IterativePipeline,
     _formater_titres,
+    _mots_contenu,
+    _regle_inventaire,
+    _sujet_enjeux,
 )
 
 TITRES_CORPS = [
@@ -231,6 +234,109 @@ def test_catalogue_desactive_par_environnement(monkeypatch):
     )
     assert "Inventaire" not in llm.prompts[0]
     assert couverture["catalogue_titres"] == 0
+
+
+# ---------------------------------------------------------------------
+# Règle d'inventaire déterministe (v2.10)
+# ---------------------------------------------------------------------
+
+def test_sujet_enjeux_extrait_le_sujet():
+    assert _sujet_enjeux("quels sont les enjeux paysagers ?") == "paysagers"
+    assert _sujet_enjeux("quel est l'enjeu acoustique ?") == "acoustique"
+
+
+def test_sujet_enjeux_absent_sans_mot_enjeu():
+    assert _sujet_enjeux("que dit le dossier sur le paysage ?") is None
+    assert _sujet_enjeux("quels sont les impacts du projet ?") is None
+
+
+def test_mots_contenu_normalise_accents_et_pluriels():
+    assert "paysagers" in _mots_contenu("Enjeux paysagers")
+    assert "paysager" in _mots_contenu("Volet paysager et patrimonial")
+    assert "paniere" in _mots_contenu("La Panière-du-Fort")
+
+
+def test_regle_inventaire_detecte_le_tome_absent():
+    """Cas mesuré : « enjeux paysagers » sans le volet paysager."""
+    passages = [
+        {"file_name": TITRES_CORPS[3]},  # RNT
+        {"file_name": TITRES_CORPS[0]},  # volet projet
+    ]
+    forcee = _regle_inventaire(
+        "quels sont les enjeux paysagers ?", passages, TITRES_CORPS
+    )
+    assert forcee is not None
+    assert forcee["verdict"] == "PARTIEL"
+    assert forcee["manques"] == [
+        "5 - PE de la Panière du Fort - Volet paysager et patrimonial.pdf"
+    ]
+    requete = forcee["requetes"][0]
+    assert "patrimonial" in requete and "paysager" in requete
+    # dédupliqué par racine : pas « paysagers paysager »
+    assert len([m for m in requete.split() if m.startswith("paysager")]) == 1
+    # les termes structurants n'entrent pas dans la requête
+    for terme in ("volet", "paniere", "fort", "pdf"):
+        assert terme not in requete
+
+
+def test_regle_inventaire_muette_quand_le_tome_est_present():
+    passages = [{"file_name": t} for t in TITRES_CORPS]
+    assert _regle_inventaire(
+        "quels sont les enjeux paysagers ?", passages, TITRES_CORPS
+    ) is None
+
+
+def test_regle_inventaire_muette_sans_mot_enjeu():
+    """Une question non-enjeux ne déclenche jamais la règle."""
+    passages = [{"file_name": TITRES_CORPS[3]}]
+    assert _regle_inventaire(
+        "que dit le dossier sur le paysage ?", passages, TITRES_CORPS
+    ) is None
+
+
+def test_regle_inventaire_muette_sans_titre_du_sujet():
+    """Aucun tome ne porte le sujet : pas de déclenchement."""
+    passages = [{"file_name": TITRES_CORPS[3]}]
+    assert _regle_inventaire(
+        "quels sont les enjeux ferroviaires ?", passages, TITRES_CORPS
+    ) is None
+
+
+def test_regle_inventaire_muette_sans_catalogue():
+    passages = [{"file_name": TITRES_CORPS[3]}]
+    assert _regle_inventaire(
+        "quels sont les enjeux paysagers ?", passages, []
+    ) is None
+
+
+def test_analyse_couverture_force_partiel_malgre_llm_couvert():
+    """Le LLM maintient COUVERT : le code force PARTIEL (cas mesuré)."""
+    llm = _LLMFactice(verdict="COUVERT")
+    analyzer = _AnalyzerFactice(_BM25Factice(_ClientFactice()), llm)
+    pipe = _pipeline(analyzer)
+    couverture = pipe._analyse_couverture(
+        "quels sont les enjeux paysagers ?",
+        [{"text": "Synthèse du RNT...", "file_name": TITRES_CORPS[3]}],
+    )
+    assert couverture["verdict"] == "PARTIEL"
+    assert couverture["requetes"]
+    assert "patrimonial" in couverture["requetes"][0]
+
+
+def test_analyse_couverture_llm_partiel_conserve_ses_requetes():
+    """PARTIEL rendu par le LLM : la règle n'écrase pas ses requêtes."""
+    llm = _LLMFactice()
+    llm.reponses = [
+        '{"verdict": "PARTIEL", "manques": ["photomontages"],'
+        ' "requetes": ["photomontages vues belvedere"]}'
+    ]
+    analyzer = _AnalyzerFactice(_BM25Factice(_ClientFactice()), llm)
+    pipe = _pipeline(analyzer)
+    couverture = pipe._analyse_couverture(
+        "quels sont les enjeux paysagers ?",
+        [{"text": "Synthèse du RNT...", "file_name": TITRES_CORPS[3]}],
+    )
+    assert couverture["requetes"] == ["photomontages vues belvedere"]
 
 
 def test_echec_llm_conserve_le_repli_couvert_et_la_trace():
