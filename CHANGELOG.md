@@ -9,6 +9,18 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ### Added
 
+- **Catalogue de titres dans l'analyse de couverture query2 (v2.9)** :
+  le prompt de couverture embarque l'inventaire des titres du corpus
+  (agrégation OpenSearch sur `file_name.keyword`, cache TTL 5 min,
+  `src/agent/catalogue.py`). Règle d'inventaire : un document dont le
+  titre correspond clairement à la demande et qu'aucun extrait ne
+  représente force un verdict PARTIEL — la recherche B à quota réservé
+  le récupère alors. Corrige le biais du tome de synthèse mesuré sur la
+  Panière du Fort (« enjeux paysagers » restitué depuis le seul RNT,
+  sans le volet paysager et patrimonial). Désactivable par
+  `QUERY2_CATALOGUE_COUVERTURE=false` ; sans catalogue disponible, le
+  prompt reste strictement identique à la v2.8.
+
 - **`BACKUP.ps1` / `RESTORE.ps1`** : sauvegarde et restauration automatisées
   d'une instance (dossier d'instance, volumes nommés Qdrant/OpenSearch,
   images Docker en option `-IncludeImages`). CLM-compatibles (cmdlets +

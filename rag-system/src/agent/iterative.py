@@ -1,5 +1,5 @@
 """
-Pipeline itératif v2.8 (endpoint expérimental /api/query2).
+Pipeline itératif v2.9 (endpoint expérimental /api/query2).
 
 Conception : DESIGN_agent_v2_pipeline_iteratif.md (8 août 2026).
 
@@ -12,7 +12,11 @@ de la route agent v1 (mesurée : 11 esquives sur 16 au benchmark MRAe) :
      moins bien que la classique (propriété de sécurité).
   2. ANALYSE DE COUVERTURE : 1 appel LLM qui lit les passages COMPLETS
      (pas des extraits de 400 caractères comme la boucle v1) et répond en
-     JSON structuré : verdict, manques, requêtes ciblées.
+     JSON structuré : verdict, manques, requêtes ciblées. Depuis la v2.9,
+     le prompt embarque l'inventaire des titres du corpus (catalogue) :
+     un tome pertinent absent des passages force un verdict PARTIEL,
+     même si la synthèse paraît complète (mesuré sur la Panière du
+     Fort : « enjeux paysagers » restitué sans le volet paysager).
   3. RECHERCHE B (si besoin) : quota réservé + question construite.
      a. QUESTION CONSTRUITE : le LLM extrait le SUJET de la demande
         (3-6 mots, tâche bornée), puis le code assemble la question
@@ -40,10 +44,13 @@ L'esquive honnête reste possible si le corpus ne contient pas l'information
 """
 
 import json
+import os
 import re
 from typing import Dict, List, Optional
 
 from loguru import logger
+
+from src.agent.catalogue import CatalogueDocuments
 
 
 # Nombre de passages complets soumis à l'analyse de couverture.
@@ -58,6 +65,17 @@ COVERAGE_MAX_QUERIES = 3
 # Places garanties dans le top final pour chaque requête ciblée
 # (quota de diversité : empêche le sujet dominant d'écraser les manques).
 QUOTA_PAR_REQUETE = 5
+
+# Inventaire des titres du corpus dans le prompt de couverture (v2.9).
+# Désactivable par QUERY2_CATALOGUE_COUVERTURE=false pour mesurer la
+# contribution du catalogue au benchmark, chemin nominal sinon inchangé.
+CATALOGUE_COUVERTURE_ACTIF = (
+    os.environ.get("QUERY2_CATALOGUE_COUVERTURE", "true").lower() == "true"
+)
+
+# Plafond de titres injectés dans le prompt : les 12 passages x 1200
+# caractères occupent déjà ~5k tokens sur la fenêtre 16k.
+CATALOGUE_PROMPT_MAX_TITRES = 100
 
 SUJET_SYSTEM_PROMPT = (
     "Tu extrais le sujet d'une demande en quelques mots. Tu réponds "
@@ -182,6 +200,38 @@ Réponds en JSON avec exactement ces trois clés :
     stockage"). Ne reprends pas la formulation de la demande
   (liste vide si COUVERT)"""
 
+# Bloc inventaire inséré entre les extraits et la consigne quand le
+# catalogue est disponible. La règle d'inventaire neutralise le biais du
+# tome de synthèse : une réponse d'apparence complète à partir du RNT ne
+# doit plus masquer l'absence du tome spécialisé.
+_BLOC_INVENTAIRE = """Inventaire des documents du corpus (titres) :
+{titres}
+
+Règle d'inventaire : si le titre d'un document de cet inventaire
+correspond clairement au sujet de la demande et qu'AUCUN des extraits
+ci-dessus ne provient de ce document, le verdict est PARTIEL — même si
+les extraits semblent suffisants — et au moins une requête doit cibler
+ce document en reprenant les termes exacts de son titre. Ignore les
+documents de l'inventaire sans rapport clair avec la demande."""
+
+# Variante avec catalogue, construite par insertion pour rester
+# synchronisée avec COVERAGE_USER_TEMPLATE : le corps de la consigne et
+# la spec JSON restent uniques.
+COVERAGE_USER_TEMPLATE_CATALOGUE = COVERAGE_USER_TEMPLATE.replace(
+    "\nImportant :",
+    "\n" + _BLOC_INVENTAIRE + "\n\nImportant :",
+)
+
+
+def _formater_titres(titres: List[str]) -> str:
+    """Inventaire à puces pour le prompt, plafonné avec mention du reliquat."""
+    if len(titres) > CATALOGUE_PROMPT_MAX_TITRES:
+        gardes = titres[:CATALOGUE_PROMPT_MAX_TITRES]
+        return "\n".join(f"- {t}" for t in gardes) + (
+            f"\n- ... et {len(titres) - len(gardes)} autres documents"
+        )
+    return "\n".join(f"- {t}" for t in titres)
+
 
 def _extraire_json(texte: str) -> Optional[Dict]:
     """Extrait le premier objet JSON d'une réponse LLM, tolérant aux
@@ -219,8 +269,23 @@ class IterativePipeline:
     exactement comme /api/query. Seule l'analyse de couverture est du
     code nouveau."""
 
-    def __init__(self, analyzer):
+    def __init__(self, analyzer, catalogue: Optional[CatalogueDocuments] = None):
         self.analyzer = analyzer
+        self._catalogue = catalogue
+
+    def _catalogue_titres(self) -> List[str]:
+        """Titres du corpus pour le prompt de couverture (v2.9).
+
+        Construction paresseuse depuis le BM25 de l'analyzer ; toute
+        indisponibilité se traduit par une liste vide, ce qui laisse le
+        prompt de couverture identique à la version sans catalogue.
+        """
+        if not CATALOGUE_COUVERTURE_ACTIF:
+            return []
+        if self._catalogue is None:
+            bm25 = getattr(self.analyzer.hybrid_search, "bm25_search", None)
+            self._catalogue = CatalogueDocuments(bm25)
+        return self._catalogue.titres()
 
     # ------------------------------------------------------------------
     # Étape 2 — analyse de couverture
@@ -230,7 +295,9 @@ class IterativePipeline:
 
         En cas d'échec de parsing ou d'appel : repli sur COUVERT, c'est-à-dire
         comportement identique à la route classique (jamais pire)."""
-        defaut = {"verdict": "COUVERT", "manques": [], "requetes": []}
+        titres = self._catalogue_titres()
+        defaut = {"verdict": "COUVERT", "manques": [], "requetes": [],
+                  "catalogue_titres": len(titres)}
 
         passages = []
         for chunk in search_results[:COVERAGE_MAX_PASSAGES]:
@@ -240,11 +307,20 @@ class IterativePipeline:
 
         bloc_passages = "\n\n---\n\n".join(passages) if passages else "Aucun extrait trouvé."
 
-        prompt = COVERAGE_USER_TEMPLATE.format(
-            query=query,
-            passages=bloc_passages,
-            max_q=COVERAGE_MAX_QUERIES,
-        )
+        if titres:
+            prompt = COVERAGE_USER_TEMPLATE_CATALOGUE.format(
+                query=query,
+                passages=bloc_passages,
+                max_q=COVERAGE_MAX_QUERIES,
+                titres=_formater_titres(titres),
+            )
+        else:
+            # Repli strict : prompt identique à la version sans catalogue.
+            prompt = COVERAGE_USER_TEMPLATE.format(
+                query=query,
+                passages=bloc_passages,
+                max_q=COVERAGE_MAX_QUERIES,
+            )
 
         try:
             brut = self.analyzer.llm_generator.call_llm(
@@ -277,7 +353,8 @@ class IterativePipeline:
         if verdict == "COUVERT":
             manques, requetes = [], []
 
-        return {"verdict": verdict, "manques": manques, "requetes": requetes}
+        return {"verdict": verdict, "manques": manques, "requetes": requetes,
+                "catalogue_titres": len(titres)}
 
     # ------------------------------------------------------------------
     # Point d'entrée
