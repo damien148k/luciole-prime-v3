@@ -42,16 +42,26 @@ correctifs ajoutent deux dépendances dans l'image (`pymupdf-layout`
 via pip, `tesseract-ocr` via apt) — un simple `git pull` + redémarrage
 ne suffit pas.
 
+Attention au **contexte de build** : `Dockerfile.gpu` et `Dockerfile.cpu`
+attendent `rag-system/` comme contexte (ils font `COPY setup/...`,
+`COPY src/...`), tandis que `Dockerfile.gpu.arm64` attend la racine du
+dépôt. Depuis la racine du dépôt :
+
 ```powershell
 # GPU (x86_64)
-docker build -f Dockerfile.gpu -t luciole-gpu:latest .
+docker build -f Dockerfile.gpu -t luciole-gpu:latest rag-system
 
 # CPU uniquement
-docker build -f Dockerfile.cpu -t luciole-cpu:latest .
+docker build -f Dockerfile.cpu -t luciole-cpu:latest rag-system
 
-# GX10 (ARM64)
+# GX10 (ARM64) — contexte = racine du dépôt
 docker build -f Dockerfile.gpu.arm64 -t luciole-gpu:latest .
 ```
+
+Si pip échoue avec `SSLCertVerificationError` sur `pypi.nvidia.com`
+(proxy/antivirus avec interception TLS), vérifier que le Dockerfile
+inclut bien `pypi.nvidia.com` dans ses `--trusted-host` (corrigé sur
+main).
 
 Site hors ligne : relancer `PREPARE_OFFLINE.ps1` (la wheel
 `pymupdf-layout` est récupérée automatiquement, elle existe en
