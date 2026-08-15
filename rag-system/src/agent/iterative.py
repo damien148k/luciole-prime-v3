@@ -42,14 +42,15 @@ Plafond dur : 1 round itératif par défaut (2 recherches max au total).
 L'esquive honnête reste possible si le corpus ne contient pas l'information
 (comportement légitime mesuré : radar, Natura 2000).
 
-v2.10 — règle d'inventaire déterministe : la règle d'inventaire du prompt
-n'est pas appliquée de façon fiable par le LLM (mesuré le 15 août 2026 sur
-la Panière du Fort : verdict COUVERT maintenu malgré l'inventaire listant
-le volet paysager absent des passages). Le code force donc PARTIEL quand
-une interrogation sur les ENJEUX porte sur un sujet pour lequel un tome de
-l'inventaire existe sans qu'aucun passage n'en provienne ; la requête
-ciblée est construite par concaténation sujet + mots du titre, jamais par
-le modèle."""
+v2.10 — règle d'inventaire déterministe : pour les interrogations sur
+les ENJEUX d'un sujet, le code force PARTIEL quand un tome de
+l'inventaire porte le sujet sans qu'aucun passage n'en provienne ; la
+requête ciblée est construite par concaténation sujet + mots du titre,
+jamais par le modèle. La règle ne voit que les tomes indexés : un
+document non ingéré est absent de l'inventaire et lui reste invisible
+(cas mesuré le 15 août 2026 sur la Panière du Fort : le volet paysager
+manquait à l'index OpenSearch — le verdict COUVERT était alors correct
+au vu du corpus réellement indexé)."""
 
 import json
 import os
@@ -482,10 +483,8 @@ class IterativePipeline:
         requetes = requetes[:COVERAGE_MAX_QUERIES]
 
         # Règle d'inventaire déterministe (v2.10) : prioritaire sur le
-        # verdict LLM. Mesuré le 15 août 2026 sur la Panière du Fort :
-        # Qwen 14B maintient COUVERT même quand l'inventaire liste le
-        # tome du sujet, absent des passages — la règle du prompt ne
-        # suffit pas, le code tranche.
+        # verdict LLM, dont l'adhérence à la consigne d'inventaire n'est
+        # pas garantie. Ne voit que les tomes présents dans l'index.
         forcee = _regle_inventaire(query, search_results, titres)
         if forcee is not None and verdict == "COUVERT":
             return {**forcee, "catalogue_titres": len(titres)}

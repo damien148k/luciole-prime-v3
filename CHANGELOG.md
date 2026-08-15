@@ -37,17 +37,16 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ### Fixed
 
-- **Règle d'inventaire désormais déterministe (query2 v2.10)** : le
-  verdict de couverture ne dépend plus de l'adhérence du LLM à la
-  consigne d'inventaire — mesuré le 15 août 2026 sur la Panière du
-  Fort, Qwen 14B maintient COUVERT alors que le volet paysager est
-  absent des passages et listé dans l'inventaire. Pour les
-  interrogations sur les « enjeux » d'un sujet, le code force PARTIEL
-  quand un tome de l'inventaire porte le sujet sans qu'aucun passage
-  n'en provienne ; la requête ciblée est assemblée par code (sujet +
-  mots distinctifs du titre, dédupliqués par racine), jamais par le
-  modèle. Déclencheur volontairement étroit (mot « enjeux ») :
-  élargissement à mesurer au banc avant d'autres vocabulaires.
+- **Règle d'inventaire désormais déterministe (query2 v2.10)** : pour
+  les interrogations sur les « enjeux » d'un sujet, le code force
+  PARTIEL quand un tome de l'inventaire porte le sujet sans qu'aucun
+  passage n'en provienne ; la requête ciblée est assemblée par code
+  (sujet + mots distinctifs du titre, dédupliqués par racine), jamais
+  par le modèle. Déclencheur volontairement étroit (mot « enjeux ») :
+  élargissement à mesurer au banc. Limite mesurée le 15 août 2026 sur
+  la Panière du Fort : un tome non ingéré est absent de l'inventaire
+  et reste invisible à la règle — le cas « enjeux paysagers » tenait
+  à l'ingestion du document, pas à l'analyse de couverture.
 
 - **`Export-WindowsRootCa` produisait un bundle CA vide/absent en entreprise**
   (`PREPARE_OFFLINE.ps1`, `INSTALL.ps1`, `INSTALL_OFFLINE.ps1`) : la
