@@ -18,6 +18,22 @@ Sur la machine qui héberge l'instance, dans le dépôt cloné :
 git pull
 ```
 
+Sans git sur la machine : télécharger le zip de `main` et construire
+depuis le dossier extrait (attention, l'extraction crée un sous-dossier
+`luciole-prime-v3-main\` — le Dockerfile est dedans) :
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/damien148k/luciole-prime-v3/archive/refs/heads/main.zip" -OutFile "$env:TEMP\luciole-main.zip"
+Expand-Archive "$env:TEMP\luciole-main.zip" -DestinationPath "$env:TEMP\luciole-main" -Force
+cd "$env:TEMP\luciole-main\luciole-prime-v3-main"
+dir Dockerfile.gpu   # doit exister ici
+# Vérifier que le code contient bien les correctifs :
+Select-String -Path rag-system\setup\requirements-linux-gpu.txt -Pattern "pymupdf-layout"
+```
+
+Remplacer ensuite le dossier du dépôt utilisé pour le build, ou builder
+directement depuis ce dossier extrait.
+
 ## Étape 2 — Reconstruire l'image
 
 Tous les services d'instance (agent, watcher, chat, admin, feedback)
