@@ -50,7 +50,19 @@ jamais par le modèle. La règle ne voit que les tomes indexés : un
 document non ingéré est absent de l'inventaire et lui reste invisible
 (cas mesuré le 15 août 2026 sur la Panière du Fort : le volet paysager
 manquait à l'index OpenSearch — le verdict COUVERT était alors correct
-au vu du corpus réellement indexé)."""
+au vu du corpus réellement indexé).
+
+v2.11 — règle de granularité dans le prompt de couverture : la présence
+d'un tome pertinent dans les passages ne suffit plus, les extraits
+doivent fournir le CONTENU au niveau de détail demandé. Mesuré le
+15 août 2026 sur la campagne query2 du jeu MRAe (Panière du Fort) :
+« décrire les sites et monuments historiques au sein des aires d'étude
+immédiate, rapprochée et élargie » déclaré COUVERT avec des passages
+liminaires du volet paysager (sommaire, synthèse) — la recherche B ne
+se déclenchait jamais et l'esquive survivait aux deux bras, alors que
+l'inventaire détaillé existe dans le tome. La règle vise les demandes
+de liste ou d'inventaire : un extrait qui annonce le sujet, y renvoie
+ou le résume sans le détailler ne compte pas comme couverture."""
 
 import json
 import os
@@ -310,11 +322,23 @@ elle-même. N'évalue donc pas si la demande y est mentionnée, mais si
 les extraits contiennent les informations de fond permettant d'y
 répondre.
 
+Niveau de détail exigé : la demande n'est couverte que si les extraits
+en donnent le CONTENU au niveau demandé, pas s'ils se contentent d'en
+parler. Pour une demande de liste ou d'inventaire (sites, monuments,
+espèces, enjeux, mesures...), les extraits doivent fournir les éléments
+eux-mêmes — noms, localisations, valeurs — et non un renvoi à une
+section, une mention générale ou une synthèse qui annonce le sujet
+sans le détailler. Un extrait de sommaire, d'introduction ou de
+synthèse qui présente le sujet sans le détailler ne compte pas comme
+couverture : dans ce cas le verdict est PARTIEL et les requêtes
+ciblent le détail manquant.
+
 Ces extraits contiennent-ils ces informations ?
 
 Réponds en JSON avec exactement ces trois clés :
 - "verdict" : "COUVERT" si les extraits contiennent l'essentiel des
-  informations, "PARTIEL" s'ils en couvrent une partie, "NON_COUVERT"
+  informations au niveau de détail demandé, "PARTIEL" s'ils en
+  couvrent une partie ou sans le détail exigé, "NON_COUVERT"
   s'ils sont hors sujet ou absents
 - "manques" : liste courte des INFORMATIONS manquantes sur le sujet
   (jamais la demande elle-même ; liste vide si COUVERT)
