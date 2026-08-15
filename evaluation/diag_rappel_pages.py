@@ -69,7 +69,10 @@ def references_attendues(chaines):
     """
     refs = []
     for c in chaines or []:
-        for m in MOTIF_REF.finditer(str(c) or ""):
+        c = str(c) or ""
+        trouve = False
+        for m in MOTIF_REF.finditer(c):
+            trouve = True
             if not m.group(2):
                 ref = (int(m.group(1)), None, None)
             else:
@@ -78,6 +81,12 @@ def references_attendues(chaines):
                 ref = (int(m.group(1)), debut, fin)
             if ref not in refs:
                 refs.append(ref)
+        # Repli : citation = nom de fichier a numero en tete
+        # ('5 - PE de la Paniere du Fort - ...pdf'), sans motif 'tome'.
+        if not trouve:
+            t = tome_du_nom(c)
+            if t is not None and (t, None, None) not in refs:
+                refs.append((t, None, None))
     return fusionner(refs)
 
 
@@ -103,7 +112,18 @@ def fusionner(refs):
 
 
 def tome_du_nom(nom):
-    m = re.search(r"tome[\s_\-]*(\d+)", str(nom) or "", re.I)
+    """Numero de tome d'un nom de fichier.
+
+    Deux conventions vues en corpus : '..._tome_5_...' (Saint-Maixent)
+    et, depuis la Paniere du Fort, un numero en tete de nom
+    ('5 - PE de la Paniere du Fort - ...pdf', '5-1 - ...pdf'). Le repli
+    accepte les deux, le motif 'tome' restant prioritaire.
+    """
+    nom = str(nom) or ""
+    m = re.search(r"tome[\s_\-]*(\d+)", nom, re.I)
+    if m:
+        return int(m.group(1))
+    m = re.match(r"^\s*(\d+)(?:[\s\-]|$)", nom)
     return int(m.group(1)) if m else None
 
 
