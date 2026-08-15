@@ -27,6 +27,20 @@ from .tools import ToolRegistry, ToolError
 
 DEFAULT_MAX_STEPS = 5
 
+# Plafond du nombre de requetes de recherche envoyees au moteur pendant un
+# run. None = aucun plafond, ce qui reste le comportement des profils qui
+# ne declarent pas la cle : cette PR ne change rien pour belacom_support ni
+# pour generic. Le plafond se pose par profil, via `max_searches`.
+#
+# Motivation (mesuree sur le jeu MRAe, 20 cas) : une consigne textuelle
+# "n'emets pas plus de trois requetes" n'est pas respectee. Le modele
+# ajoute une quatrieme requete qui refond les themes en un seul, et cette
+# requete large ramene le mauvais document : sur mrae-06, elle a fait citer
+# le tome 1 volet projet a la place du tome 5 paysage. Le garde-fou des
+# recherches repetees (PR #15) ne l'attrape pas, puisque cette requete est
+# bel et bien nouvelle.
+DEFAULT_MAX_SEARCHES = None
+
 # Budget d'injection du contenu retrouve dans les observations transmises au
 # planificateur. Sans extraits, le LLM ne voit que des noms de fichiers : il
 # redige alors sa reponse sans avoir jamais lu les documents, et fabrique le
@@ -227,7 +241,10 @@ class AgentOrchestrator:
         Args:
             query: requête utilisateur
             profile: profil métier chargé (voir agent_profiles.py), doit
-                contenir au minimum tools_allowed, max_steps, system_prompt
+                contenir au minimum tools_allowed, max_steps, system_prompt.
+                Cle optionnelle max_searches : nombre maximal de requetes de
+                recherche envoyees au moteur pour cette question (absente =
+                pas de plafond)
             history: historique de conversation optionnel (liste de
                 {"role": ..., "content": ...})
 
@@ -244,6 +261,7 @@ class AgentOrchestrator:
                 - stopped_reason: "final_answer" | "max_steps" | "error"
         """
         max_steps = int(profile.get("max_steps", DEFAULT_MAX_STEPS))
+        max_searches = self._lire_plafond_recherches(profile)
         tools_allowed = profile.get("tools_allowed") or []
         system_prompt = profile.get("system_prompt", "").strip() or (
             "Tu es un agent Luciole. Utilise les outils disponibles pour "
@@ -464,6 +482,37 @@ class AgentOrchestrator:
                 return self._finalize(trace, message, [], step, reason)
 
             # Tool intermédiaire (search_documents, get_document, etc.)
+            plafond_atteint = (
+                max_searches is not None
+                and tool_name in self.OUTILS_DE_RECHERCHE
+                and len(recherches_vues) >= max_searches
+            )
+            if plafond_atteint:
+                logger.warning(
+                    f"Étape {step}: plafond de {max_searches} recherche(s) "
+                    f"atteint, appel à {tool_name} non exécuté"
+                )
+                observation = (
+                    f"Plafond atteint : {len(recherches_vues)} requête(s) de "
+                    f"recherche ont déjà été envoyées au moteur, la limite "
+                    f"pour cette question est de {max_searches}. Cette "
+                    f"recherche n'a pas été lancée et aucune autre ne le "
+                    f"sera. Conclus maintenant avec les passages déjà "
+                    f"obtenus : final_answer si tu peux étayer une réponse "
+                    f"par au moins un passage, no_answer sinon."
+                )
+                trace.append({
+                    "step": step,
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "result": None,
+                    "error": None,
+                    "duration_ms": duration_ms,
+                    "note": "plafond_recherches_atteint",
+                })
+                observations.append(observation)
+                continue
+
             recherche_repetee = self._recherche_deja_faite(
                 tool_name, tool_args, recherches_vues
             )
@@ -632,6 +681,35 @@ Aucun texte avant ou après le JSON."""
     # =========================================================================
 
     OUTILS_DE_RECHERCHE = {"search_documents": "query", "search_multi": "queries"}
+
+    @staticmethod
+    def _lire_plafond_recherches(profile: Dict) -> Optional[int]:
+        """Plafond de recherches declare par le profil, ou None.
+
+        Une valeur absente, nulle, non entiere ou inferieure a 1 vaut
+        absence de plafond : un plafond de 0 interdirait toute recherche et
+        rendrait la boucle agentique inutile, ce n'est jamais une intention
+        legitime. Le cas est journalise pour qu'une faute de frappe dans un
+        profil ne passe pas silencieusement.
+        """
+        brut = profile.get("max_searches", DEFAULT_MAX_SEARCHES)
+        if brut is None:
+            return None
+        try:
+            valeur = int(brut)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"Profil {profile.get('name', '?')!r}: max_searches={brut!r} "
+                f"n'est pas un entier, plafond ignoré"
+            )
+            return None
+        if valeur < 1:
+            logger.warning(
+                f"Profil {profile.get('name', '?')!r}: max_searches={valeur} "
+                f"est inférieur à 1, plafond ignoré"
+            )
+            return None
+        return valeur
 
     @staticmethod
     def _normaliser_requete(texte: str) -> str:
