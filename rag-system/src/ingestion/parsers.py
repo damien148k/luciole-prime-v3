@@ -100,7 +100,8 @@ class PDFParser(BaseParser):
         ocr_dpi: int = 300,
         markdown_timeout: int = 300,
         markdown_timeout_per_page: float = 2.0,
-        max_drawings_per_page: int = 500
+        max_drawings_per_page: int = 500,
+        min_yield_ratio: float = 0.5
     ):
         """
         Args:
@@ -112,6 +113,10 @@ class PDFParser(BaseParser):
             markdown_timeout: Timeout de base en secondes pour pymupdf4llm.to_markdown (défaut: 300s)
             markdown_timeout_per_page: Secondes supplémentaires par page (défaut: 2.0s/page)
             max_drawings_per_page: Seuil de dessins/page au-delà duquel on utilise l'extraction simple
+            min_yield_ratio: Rendement minimal de pymupdf4llm par page, mesuré contre
+                l'extraction simple get_text("text") de la même page (défaut: 0.5).
+                En dessous, la page est re-extraite en texte simple. Mettre 0 pour
+                désactiver le garde-fou.
         """
         self.enable_ocr = enable_ocr
         self.ocr_languages = ocr_languages or ['fr', 'en']
@@ -121,6 +126,7 @@ class PDFParser(BaseParser):
         self.markdown_timeout = markdown_timeout
         self.markdown_timeout_per_page = markdown_timeout_per_page
         self.max_drawings_per_page = max_drawings_per_page
+        self.min_yield_ratio = min_yield_ratio
         self._ocr_processor = None
     
     @property
@@ -220,59 +226,123 @@ class PDFParser(BaseParser):
         all_parts = []
         page_spans: List[Tuple[int, int, int]] = []
         offset = 0
-        
-        for start in range(0, page_count, batch_size):
-            end = min(start + batch_size, page_count)
-            pages = list(range(start, end))
-            
-            # Le batch est prepare a part avant d'etre verse dans le texte
-            # et la table de pagination. Verser au fil de la boucle exposait
-            # a un etat incoherent : une exception levee apres l'ajout du
-            # texte d'une page mais avant l'ajout de son span faisait rejouer
-            # tout le batch par le repli, dupliquant le texte sans avancer
-            # `offset`. Toutes les positions suivantes devenaient fausses.
-            lot: List[Tuple[str, int]] = []
 
-            try:
-                page_dicts = pymupdf4llm.to_markdown(file_path, pages=pages, page_chunks=True)
-                if len(page_dicts) != len(pages):
-                    raise ValueError(
-                        f"pymupdf4llm a renvoye {len(page_dicts)} pages pour "
-                        f"{len(pages)} demandees"
+        # Le document de reference sert au garde-fou de rendement (comparaison
+        # avec get_text("text")) et au repli page par page en cas d'echec de
+        # pymupdf4llm. Ouvert une seule fois pour tout le document.
+        doc_ref = pymupdf.open(file_path) if self.min_yield_ratio > 0 else None
+        pages_reprises = 0
+
+        try:
+            for start in range(0, page_count, batch_size):
+                end = min(start + batch_size, page_count)
+                pages = list(range(start, end))
+                lot = self._extraire_lot(file_path, pages, doc_ref)
+                pages_reprises += sum(1 for text, _, reprise in lot if reprise)
+
+                for text, page_num, _ in lot:
+                    all_parts.append(text)
+                    page_spans.append((offset, offset + len(text), page_num))
+                    offset += len(text)
+
+                # Log de progression tous les 50 pages
+                if end % 50 == 0 or end == page_count:
+                    logger.info(f"Extraction pymupdf4llm: {end}/{page_count} pages traitées")
+        finally:
+            if doc_ref is not None:
+                doc_ref.close()
+
+        if pages_reprises:
+            logger.warning(
+                f"{file_path}: {pages_reprises}/{page_count} pages re-extraites en "
+                f"texte simple (rendement pymupdf4llm < {self.min_yield_ratio:.0%} "
+                f"de l'extraction brute)"
+            )
+
+        return "".join(all_parts), page_spans
+
+    def _extraire_lot(
+        self,
+        file_path: str,
+        pages: List[int],
+        doc_ref,
+    ) -> List[Tuple[str, int, bool]]:
+        """
+        Extrait un lot de pages via pymupdf4llm, avec repli par page.
+
+        Retourne une liste de tuples (texte, numero_page_base1, repris) ou
+        `repris` indique que la page a ete re-extraite en texte simple par
+        le garde-fou de rendement ou apres echec de pymupdf4llm.
+        """
+        lot: List[Tuple[str, int, bool]] = []
+        debut, fin = pages[0], pages[-1]
+        try:
+            page_dicts = pymupdf4llm.to_markdown(file_path, pages=pages, page_chunks=True)
+            if len(page_dicts) != len(pages):
+                raise ValueError(
+                    f"pymupdf4llm a renvoye {len(page_dicts)} pages pour "
+                    f"{len(pages)} demandees"
+                )
+            # Le numero de page vient de `pages`, jamais des metadonnees.
+            # La clef y varie selon la version et les greffons installes
+            # ("page" ou "page_number" selon la presence de
+            # pymupdf_layout), alors que l'ordre de retour suit toujours
+            # l'ordre demande.
+            for p, page_dict in zip(pages, page_dicts):
+                text = page_dict.get("text") or ""
+                reprise = False
+                if doc_ref is not None:
+                    text, reprise = self._appliquer_garde_fou_rendement(
+                        doc_ref, p, text
                     )
-                # Le numero de page vient de `pages`, jamais des metadonnees.
-                # La clef y varie selon la version et les greffons installes
-                # ("page" ou "page_number" selon la presence de
-                # pymupdf_layout), alors que l'ordre de retour suit toujours
-                # l'ordre demande.
-                for p, page_dict in zip(pages, page_dicts):
-                    text = page_dict.get("text") or ""
-                    if text:
-                        lot.append((text, p + 1))
-                logger.debug(f"pymupdf4llm pages {start+1}-{end}/{page_count} OK")
-            except Exception as e:
-                logger.warning(f"pymupdf4llm échoué pages {start+1}-{end}: {e} - fallback extraction simple")
-                # Fallback page par page avec extraction simple pour ce batch.
-                # `lot` est reinitialise : rien du tour precedent ne subsiste.
-                lot = []
-                doc = pymupdf.open(file_path)
+                if text:
+                    lot.append((text, p + 1, reprise))
+            logger.debug(f"pymupdf4llm pages {debut+1}-{fin+1} OK")
+        except Exception as e:
+            logger.warning(f"pymupdf4llm échoué pages {debut+1}-{fin+1}: {e} - fallback extraction simple")
+            # Fallback page par page avec extraction simple pour ce batch.
+            # `lot` est reinitialise : rien du tour precedent ne subsiste.
+            lot = []
+            doc = doc_ref if doc_ref is not None else pymupdf.open(file_path)
+            try:
                 for p in pages:
                     text = doc[p].get_text("text")
                     if text.strip():
-                        lot.append((text, p + 1))
-                doc.close()
+                        lot.append((text, p + 1, True))
+            finally:
+                if doc_ref is None:
+                    doc.close()
 
-            for text, page_num in lot:
-                all_parts.append(text)
-                page_spans.append((offset, offset + len(text), page_num))
-                offset += len(text)
-            
-            # Log de progression tous les 50 pages
-            if end % 50 == 0 or end == page_count:
-                logger.info(f"Extraction pymupdf4llm: {end}/{page_count} pages traitées")
-        
-        return "".join(all_parts), page_spans
-    
+        return lot
+
+    def _appliquer_garde_fou_rendement(self, doc_ref, p: int, text_md: str) -> Tuple[str, bool]:
+        """
+        Garde-fou de rendement par page.
+
+        Sans le greffon pymupdf-layout, l'analyse de mise en page de
+        pymupdf4llm rejette silencieusement la quasi-totalite des boites de
+        texte de certaines pages (constate sur des etudes d'impact au format
+        A3 paysage a mise en page graphique dense : seuls les titres et
+        pieds de page survivaient, ~35 % du texte au global). Aucune
+        exception n'est levee et force_text=True ne change rien : seule une
+        comparaison de rendement detecte la perte.
+
+        Si le markdown d'une page est plus court que `min_yield_ratio` fois
+        le texte brut de la meme page, la page est re-extraite en texte
+        simple. Les pages quasi vides (titre seul, < 200 chars de reference)
+        ne sont pas touchees : un ecart absolu minime y est normal.
+        """
+        ref = doc_ref[p].get_text("text")
+        ref_len = len(ref)
+        if ref_len >= 200 and len(text_md) < self.min_yield_ratio * ref_len:
+            logger.debug(
+                f"Page {p + 1}: rendement pymupdf4llm insuffisant "
+                f"({len(text_md)} chars vs {ref_len} en extraction simple), "
+                f"re-extraction en texte simple"
+            )
+            return ref, True
+        return text_md, False
+
     def parse(self, file_path: str) -> Dict:
         logger.info(f"Parsing PDF: {file_path}")
         try:
@@ -1470,6 +1540,7 @@ class DocumentParser:
         pdf_ocr_dpi = self.pdf_config.get("ocr_dpi", 300)
         pdf_max_drawings = self.pdf_config.get("max_drawings_per_page", 500)
         pdf_enable_ocr = self.pdf_config.get("enable_ocr", True)
+        pdf_min_yield_ratio = self.pdf_config.get("min_yield_ratio", 0.5)
         
         parser_classes = [
             # PDF avec OCR EasyOCR (GPU) automatique pour pages scannées/vectorielles
@@ -1482,7 +1553,8 @@ class DocumentParser:
                 ocr_dpi=pdf_ocr_dpi,
                 markdown_timeout=pdf_timeout,
                 markdown_timeout_per_page=pdf_timeout_per_page,
-                max_drawings_per_page=pdf_max_drawings
+                max_drawings_per_page=pdf_max_drawings,
+                min_yield_ratio=pdf_min_yield_ratio
             ),
             DOCXParser(),
             PPTXParser(),

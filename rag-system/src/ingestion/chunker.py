@@ -321,8 +321,10 @@ class Chunker:
         de caracteres. Sans borne, ce fragment part tel quel vers l'encodeur
         et sature la memoire du GPU.
 
-        La coupure est cherchee sur un caractere blanc en fin de fenetre afin
-        de ne pas tronquer un mot au milieu.
+        La coupure est cherchee en fin de fenetre d'abord sur un saut de
+        ligne (frontiere de ligne de tableau Markdown : une ligne coupee en
+        deux produit deux demi-lignes inexploitables), sinon sur un espace,
+        afin de ne pas tronquer un mot au milieu.
         """
         if limit <= 0 or len(text) <= limit:
             return [text]
@@ -334,7 +336,9 @@ class Chunker:
         while debut < len(text):
             fin = min(debut + limit, len(text))
             if fin < len(text):
-                fenetre = text.rfind(" ", debut + pas // 2, fin)
+                fenetre = text.rfind("\n", debut + pas // 2, fin)
+                if fenetre <= debut:
+                    fenetre = text.rfind(" ", debut + pas // 2, fin)
                 if fenetre > debut:
                     fin = fenetre
             morceau = text[debut:fin].strip()
@@ -526,7 +530,99 @@ class Chunker:
                 fin_reelle if fin_reelle is not None else -1,
             ))
 
+        chunks = self._reinjecter_entetes_tableaux(content, chunks, file_context)
+
         logger.info(f"Created {len(chunks)} chunks for document: {doc_id} (sentence)")
+        return chunks
+
+    # =========================================================================
+    # TABLEAUX MARKDOWN
+    # =========================================================================
+
+    # Une ligne de tableau Markdown commence par un pipe (apres espaces
+    # eventuels). pymupdf4llm produit ce format pour les tableaux PDF.
+    _LIGNE_TABLEAU_RE = re.compile(r"^\s*\|")
+    # Ligne de separation d'en-tete : |---|---| (tirets, deux-points, espaces)
+    _SEPARATEUR_TABLEAU_RE = re.compile(r"^\s*\|[\s:\-|]+\|\s*$")
+
+    @classmethod
+    def _detecter_tableaux(cls, content: str) -> List[Dict]:
+        """
+        Repere les blocs de tableaux Markdown dans `content`.
+
+        Retourne une liste de dicts {debut, fin, entete} ou `debut`/`fin`
+        sont les offsets du bloc dans `content` et `entete` le texte des
+        lignes d'en-tete (ligne de titres + ligne de separation
+        |---|---| si presente), destine a etre re-injecte dans les
+        fragments qui commencent au milieu du tableau.
+        """
+        tableaux: List[Dict] = []
+        debut_bloc: Optional[int] = None
+        pos = 0
+        for ligne in content.split("\n"):
+            if cls._LIGNE_TABLEAU_RE.match(ligne):
+                if debut_bloc is None:
+                    debut_bloc = pos
+            else:
+                if debut_bloc is not None:
+                    tableaux.append({"debut": debut_bloc, "fin": pos})
+                    debut_bloc = None
+            pos += len(ligne) + 1
+        if debut_bloc is not None:
+            tableaux.append({"debut": debut_bloc, "fin": len(content)})
+
+        for tableau in tableaux:
+            lignes = content[tableau["debut"]:tableau["fin"]].split("\n")
+            entete_lignes = lignes[:1]
+            if len(lignes) > 1 and cls._SEPARATEUR_TABLEAU_RE.match(lignes[1]):
+                entete_lignes.append(lignes[1])
+            tableau["entete"] = "\n".join(entete_lignes)
+            # Offset de fin de l'en-tete dans content : un fragment qui
+            # commence apres cet offset ne contient pas l'en-tete.
+            tableau["fin_entete"] = tableau["debut"] + len(tableau["entete"])
+
+        return tableaux
+
+    def _reinjecter_entetes_tableaux(self, content: str, chunks: List[Chunk], file_context: str) -> List[Chunk]:
+        """
+        Re-injecte l'en-tete d'un tableau Markdown dans les fragments qui
+        commencent au milieu de ce tableau.
+
+        Un long tableau (inventaire des monuments historiques, matrice de
+        sensibilite) est decoupe en plusieurs fragments : sans rappel des
+        colonnes, les fragments suivants sont des lignes de cellules
+        orphelines, difficiles a interpreter pour l'encodeur comme pour le
+        LLM. L'en-tete est prefixe au texte du fragment, a la maniere du
+        contexte fichier deja prefixe par _make_chunk : c'est un contexte
+        de presentation, les offsets start_char/end_char continuent donc de
+        decrire la zone reelle du document (pagination inchangee).
+        """
+        if not chunks:
+            return chunks
+
+        tableaux = self._detecter_tableaux(content)
+        if not tableaux:
+            return chunks
+
+        nb_reinjections = 0
+        for chunk in chunks:
+            if chunk.start_char is None or chunk.start_char < 0:
+                continue
+            for tableau in tableaux:
+                if tableau["debut"] <= chunk.start_char < tableau["fin"]:
+                    if chunk.start_char > tableau["fin_entete"]:
+                        chunk.text = f"{tableau['entete']}\n{chunk.text}"
+                        chunk.text_with_context = (
+                            f"{file_context}\n{chunk.text}"
+                            if self.include_file_context else chunk.text
+                        )
+                        nb_reinjections += 1
+                    break
+
+        if nb_reinjections:
+            logger.info(
+                f"{nb_reinjections} fragment(s) ont recu l'en-tete de leur tableau"
+            )
         return chunks
 
     # =========================================================================

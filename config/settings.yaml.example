@@ -121,6 +121,11 @@ pdf:
   markdown_timeout_per_page: 2.0
   ocr_dpi: 300
   max_drawings_per_page: 500
+  # Garde-fou de rendement : si le markdown extrait d'une page fait moins de
+  # 50 % du texte brut de la meme page (get_text), la page est re-extraite en
+  # texte simple. Protege contre les pertes silencieuses de pymupdf4llm sur
+  # les pages a mise en page complexe. Mettre 0 pour desactiver.
+  min_yield_ratio: 0.5
 
 opensearch:
   host: localhost
