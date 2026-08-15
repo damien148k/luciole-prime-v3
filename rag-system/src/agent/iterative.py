@@ -41,11 +41,20 @@ de la route agent v1 (mesurée : 11 esquives sur 16 au benchmark MRAe) :
 Plafond dur : 1 round itératif par défaut (2 recherches max au total).
 L'esquive honnête reste possible si le corpus ne contient pas l'information
 (comportement légitime mesuré : radar, Natura 2000).
-"""
+
+v2.10 — règle d'inventaire déterministe : la règle d'inventaire du prompt
+n'est pas appliquée de façon fiable par le LLM (mesuré le 15 août 2026 sur
+la Panière du Fort : verdict COUVERT maintenu malgré l'inventaire listant
+le volet paysager absent des passages). Le code force donc PARTIEL quand
+une interrogation sur les ENJEUX porte sur un sujet pour lequel un tome de
+l'inventaire existe sans qu'aucun passage n'en provienne ; la requête
+ciblée est construite par concaténation sujet + mots du titre, jamais par
+le modèle."""
 
 import json
 import os
 import re
+import unicodedata
 from typing import Dict, List, Optional
 
 from loguru import logger
@@ -118,6 +127,128 @@ QUESTION_TEMPLATE = "Que disent les documents sur {sujet} ?"
 # Lettres attendues dans un sujet en français : alphabet de base et
 # accents effectivement utilisés (àâäçéèêëîïôöùûüÿæœ et majuscules).
 _LETTRES_FR = re.compile(r"[a-zàâäçéèêëîïôöùûüÿæœ]", re.IGNORECASE)
+
+# Déclencheur de la règle d'inventaire déterministe (v2.10) : la demande
+# doit interroger les ENJEUX d'un sujet. Le déclencheur est étroit à
+# dessein — un mécanisme générique « titre correspond à la demande »
+# échouerait sur les noms de projet présents dans tous les tomes.
+_MOTIFS_ENJEUX = re.compile(r"\benjeux?\b", re.IGNORECASE)
+
+# Mots vides exclus du matching de sujet et des termes de titre.
+_MOTS_VIDES = frozenset({
+    "le", "la", "les", "du", "de", "des", "un", "une", "au", "aux",
+    "et", "ou", "en", "dans", "sur", "sont", "est", "quels", "quelles",
+    "quel", "quelle", "pe", "d", "l", "etude", "etudes",
+})
+
+# Termes structurels des noms de tomes : présents dans tous les fichiers
+# du corpus (projet, étude, impact...), ils ne discriminent rien et ne
+# doivent jamais déclencher ni composer une requête d'inventaire.
+_TERMES_STRUCTURANTS = frozenset({
+    "projet", "volet", "tome", "rnt", "fort", "panere", "paniere",
+    "panier", "impact", "impacts", "environnement",
+})
+
+
+def _normaliser_mot(mot: str) -> str:
+    """Minuscules sans accents, apostrophes et tirets normalisés."""
+    mot = mot.lower().replace("'", " ").replace("-", " ")
+    return "".join(
+        c for c in unicodedata.normalize("NFD", mot)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def _mots_contenu(texte: str) -> set:
+    """Mots de contenu normalisés : lettres uniquement, >= 4 caractères,
+    racine tronquée (le « s » final est retiré par l'appelant)."""
+    mots = set()
+    for brut in re.findall(r"[a-zàâäçéèêëîïôöùûüÿæœ]+", _normaliser_mot(texte)):
+        if len(brut) >= 4 and brut not in _MOTS_VIDES:
+            mots.add(brut)
+    return mots
+
+
+def _racine(mot: str) -> str:
+    """Racine de matching : singulier approximatif, jamais < 4 lettres."""
+    return mot[:-1] if mot.endswith("s") and len(mot) > 4 else mot
+
+
+def _sujet_enjeux(query: str) -> Optional[str]:
+    """Sujet d'une interrogation sur les enjeux, ou None.
+
+    Le sujet est le texte après le mot « enjeux(x) » : « quels sont les
+    enjeux paysagers ? » -> « paysagers ». Sans « enjeux », la demande
+    n'est pas du ressort de la règle d'inventaire.
+    """
+    m = _MOTIFS_ENJEUX.search(query)
+    if not m:
+        return None
+    sujet = query[m.end():].strip().rstrip("?").strip(" .")
+    return sujet or None
+
+
+def _regle_inventaire(
+    query: str, search_results: List[Dict], titres: List[str]
+) -> Optional[Dict]:
+    """Force PARTIEL quand un tome du sujet d'enjeux est absent des passages.
+
+    Déclencheurs cumulatifs, tous requis :
+      - la demande interroge les enjeux d'un sujet (_sujet_enjeux) ;
+      - un mot de contenu du sujet apparaît dans au moins un titre de
+        l'inventaire (racines comparées : « paysagers » matche « paysager ») ;
+      - aucun passage de la recherche A ne provient d'un tel document.
+
+    La requête ciblée est assemblée par code : sujet normalisé suivi des
+    mots distinctifs du titre (hors termes structurants communs à tous
+    les tomes) — jamais par le modèle.
+    """
+    if not titres:
+        return None
+    sujet = _sujet_enjeux(query)
+    if not sujet:
+        return None
+    racines_sujet = {_racine(m) for m in _mots_contenu(sujet)}
+    if not racines_sujet:
+        return None
+
+    tomes_du_sujet = []
+    for titre in titres:
+        racines_titre = {_racine(m) for m in _mots_contenu(titre)}
+        if racines_sujet & racines_titre:
+            tomes_du_sujet.append(titre)
+    if not tomes_du_sujet:
+        return None
+
+    presents = {chunk.get("file_name") for chunk in search_results}
+    absents = [t for t in tomes_du_sujet if t not in presents]
+    if not absents:
+        return None
+
+    # Requête assemblée par code : mots du sujet puis mots distinctifs
+    # du titre, dédupliqués par racine (« paysagers » absorbe « paysager »).
+    requetes = []
+    for titre in absents[:COVERAGE_MAX_QUERIES]:
+        termes: List[str] = []
+        racines_vues = set()
+        for mot in sorted(_mots_contenu(sujet)) + sorted(
+            m for m in _mots_contenu(titre) if m not in _TERMES_STRUCTURANTS
+        ):
+            racine = _racine(mot)
+            if racine not in racines_vues:
+                racines_vues.add(racine)
+                termes.append(mot)
+        requete = " ".join(termes).strip()
+        if requete:
+            requetes.append(requete)
+    if not requetes:
+        return None
+
+    logger.info(
+        f"query2: regle inventaire -> PARTIEL force, "
+        f"tomes absents={absents}, requetes={requetes}"
+    )
+    return {"verdict": "PARTIEL", "manques": absents, "requetes": requetes}
 
 
 def _sujet_incoherent(sujet: str) -> bool:
@@ -349,6 +480,15 @@ class IterativePipeline:
         # Garder des requêtes non vides, plafonnées
         requetes = [r.strip() for r in requetes if isinstance(r, str) and r.strip()]
         requetes = requetes[:COVERAGE_MAX_QUERIES]
+
+        # Règle d'inventaire déterministe (v2.10) : prioritaire sur le
+        # verdict LLM. Mesuré le 15 août 2026 sur la Panière du Fort :
+        # Qwen 14B maintient COUVERT même quand l'inventaire liste le
+        # tome du sujet, absent des passages — la règle du prompt ne
+        # suffit pas, le code tranche.
+        forcee = _regle_inventaire(query, search_results, titres)
+        if forcee is not None and verdict == "COUVERT":
+            return {**forcee, "catalogue_titres": len(titres)}
 
         if verdict == "COUVERT":
             manques, requetes = [], []
