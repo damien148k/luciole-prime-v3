@@ -26,6 +26,15 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
   images Docker en option `-IncludeImages`). CLM-compatibles (cmdlets +
   docker uniquement). Voir `docs/SAUVEGARDE.md`.
 
+### Changed
+
+- **`WATCHER_MAX_FILE_SIZE_MB` configurable par instance** (compose
+  généré, défaut inchangé à 500 Mo) : le plafond était codé en dur et
+  les fichiers au-delà étaient ignorés silencieusement — mesuré le
+  15 août 2026 sur la Panière du Fort, où le volet paysager (664 Mo)
+  et le carnet de photomontages (874 Mo) n'étaient jamais ingérés.
+  Positionner la variable dans le `.env` de l'instance pour l'ajuster.
+
 ### Fixed
 
 - **Règle d'inventaire désormais déterministe (query2 v2.10)** : pour
