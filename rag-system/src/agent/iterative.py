@@ -62,7 +62,21 @@ liminaires du volet paysager (sommaire, synthèse) — la recherche B ne
 se déclenchait jamais et l'esquive survivait aux deux bras, alors que
 l'inventaire détaillé existe dans le tome. La règle vise les demandes
 de liste ou d'inventaire : un extrait qui annonce le sujet, y renvoie
-ou le résume sans le détailler ne compte pas comme couverture."""
+ou le résume sans le détailler ne compte pas comme couverture.
+
+v2.12 — les demandes d'énumération survivent à la reformulation.
+Mesuré le 17 août 2026 sur la Panière du Fort : « fait une liste des
+monuments, sites et bâtiments présents autour du projet » — le sujet
+extrait (« la liste des monuments, sites et bâtiments ») était rejeté
+deux fois par _sujet_incoherent à cause des VIRGULES, le repli sur la
+requête de couverture produisait « Que disent les documents sur
+monuments historiques zone projet ? », et la génération répondait à
+cette question étroite avec les passages réglementaires au lieu de
+compiler l'inventaire présent dans les 25 passages. Trois correctifs :
+la virgule entre dans la liste blanche du sujet, l'extraction reçoit
+un exemple d'énumération (sans le wrapper « la liste des »), et les
+demandes de liste sont assemblées avec « Quels sont {sujet} ? » —
+l'intention d'inventaire atteint la génération."""
 
 import json
 import os
@@ -107,9 +121,12 @@ SUJET_SYSTEM_PROMPT = (
 SUJET_USER_TEMPLATE = """Quel est le sujet de la demande suivante ?
 
 Règles :
-- 3 à 6 mots, avec le déterminant (le, la, les, du, de la, des, l')
+- 3 à 6 mots, avec le déterminant (le, la, les, du, de la, des, l') ;
+  davantage si la demande énumère plusieurs objets — garde alors
+  l'énumération complète, avec ses virgules
 - le sujet désigne les informations recherchées, JAMAIS l'auteur de
   la demande (autorité, client, comité...) ni la demande elle-même
+  (« la liste de », « la description de » ne font pas partie du sujet)
 - garde la langue de la demande
 
 Exemples :
@@ -118,6 +135,9 @@ Sujet : le calendrier des travaux et les horaires de chantier
 
 Demande : Le comité demande de compléter le rapport avec une analyse des coûts de maintenance.
 Sujet : l'analyse des coûts de maintenance
+
+Demande : Fais la liste des monuments, sites et bâtiments présents autour du projet.
+Sujet : les monuments, sites et bâtiments autour du projet
 
 Demande : {query}
 Sujet :"""
@@ -136,6 +156,19 @@ SUJET_SYSTEM_PROMPT_RENFORCE = (
 # Mécanique volontairement : la forme de la question ne dépend plus du
 # modèle, seul le sujet vient du LLM.
 QUESTION_TEMPLATE = "Que disent les documents sur {sujet} ?"
+
+# v2.12 : gabarit des demandes de LISTE. « Que disent les documents sur
+# X ? » laisse la génération résumer les passages les plus saillants ;
+# « Quels sont {sujet} ? » lui impose de compiler les éléments. Le
+# gabarit n'est grammatical qu'avec un déterminant pluriel — d'où la
+# garde dans _reformuler_en_question.
+QUESTION_TEMPLATE_LISTE = "Quels sont {sujet} ?"
+
+# Demande en forme de liste : « fais la liste de... », « quels sont... »,
+# « énumère... ». Le sujet extrait d'une telle demande est souvent une
+# énumération à virgules — légitime, voir _sujet_incoherent.
+_DEMANDE_LISTE = re.compile(
+    r"\blistes?\b|\bquels\b|\bquelles\b|\b[ée]num[ée]r", re.IGNORECASE)
 
 # Lettres attendues dans un sujet en français : alphabet de base et
 # accents effectivement utilisés (àâäçéèêëîïôöùûüÿæœ et majuscules).
@@ -298,7 +331,9 @@ def _sujet_incoherent(sujet: str) -> bool:
             # retry du 10 août : « ...éviter réduire补偿Head »).
             if not _LETTRES_FR.match(c):
                 return True
-        elif c not in " '-":
+        elif c not in " '-,":
+            # Virgule admise (v2.12) : les sujets d'énumération en sont
+            # pleins — « les monuments, sites et bâtiments ».
             return True
     return False
 
@@ -643,7 +678,13 @@ class IterativePipeline:
             logger.warning("query2: extraction impossible, demande conservee")
             return query
 
-        question = QUESTION_TEMPLATE.format(sujet=sujet)
+        # v2.12 : une demande de liste garde son intention d'inventaire.
+        # Garde du déterminant pluriel : « Quels sont le calendrier... »
+        # serait incorrect, le gabarit standard reste le repli.
+        template = QUESTION_TEMPLATE
+        if _DEMANDE_LISTE.search(query) and sujet[:4].lower() in ("les ", "des "):
+            template = QUESTION_TEMPLATE_LISTE
+        question = template.format(sujet=sujet)
         logger.info(f"query2: sujet='{sujet[:80]}' -> question='{question[:120]}'")
         return question
 
