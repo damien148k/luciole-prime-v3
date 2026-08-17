@@ -156,8 +156,14 @@ feedback:
 ragas:
   enabled: true
   use_local_llm: true
+  # eval_model : nom du modele tel que servi par le backend LLM actif
+  # (SERVED_MODEL_NAME cote tensorrt-llm, ou tag visible dans `ollama list`
+  # pour le profil Ollama, ex. qwen2.5:14b-instruct-q4_K_M).
   eval_model: qwen3-30b-a3b-instruct
-  embed_model: BAAI/bge-m3
+  # embed_model : appele via l'API OpenAI-compatible de LLM_URL — ce doit etre
+  # un modele d'embedding servi par CE backend (ex. nomic-embed-text sous
+  # Ollama), PAS un modele HuggingFace local type BAAI/bge-m3.
+  embed_model: nomic-embed-text
   metrics:
     - faithfulness
     - answer_relevancy
