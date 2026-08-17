@@ -57,7 +57,15 @@ bcrypt>=4.1.0
 # Chiffrement (module mail — secrets IMAP/SMTP)
 cryptography>=42.0.0
 
-# Évaluation RAGAS
-ragas>=0.2.0
-langchain-openai>=0.1.0
-datasets>=2.18.0
+# Évaluation RAGAS — versions épinglées : ragas 0.4.3 importe
+# langchain_community.chat_models.vertexai, supprimé de langchain-community 0.4.x
+# (ImportError au démarrage de /api/admin/ragas/evaluate). La pile langchain doit
+# donc rester en 0.3.x. Validé : ragas 0.4.3 + langchain-core 0.3.86 +
+# langchain-community 0.3.31 + langchain-openai 0.3.35 + datasets 5.0.1.
+ragas==0.4.3
+langchain==0.3.27
+langchain-core==0.3.86
+langchain-community==0.3.31
+langchain-openai==0.3.35
+langchain-text-splitters==0.3.11
+datasets>=4.0.0,<6.0.0
