@@ -157,7 +157,7 @@ class PromptsConfig:
         """
         return {
             'system_prompt': (
-                'Tu es Luciole, un assistant documentaire de wpd France. '
+                'Tu es Luciole, un assistant documentaire. '
                 'Tu t\'appuies en priorité sur les documents fournis. '
                 'Ne jamais inventer de données factuelles. '
                 'Toujours citer tes sources.'
@@ -167,7 +167,8 @@ class PromptsConfig:
                 'Question de l\'utilisateur : {query}\n\n'
                 'Réponds à la question en te basant UNIQUEMENT sur le contexte fourni. '
                 'Si l\'information n\'est pas présente, indique-le clairement. '
-                'Cite tes sources à la fin de ta réponse.'
+                'Cite le document et la page indiqués dans l\'étiquette de source '
+                'de chaque extrait utilisé.'
             ),
             'no_results_prompt': (
                 'Aucun document pertinent n\'a été trouvé pour cette requête : \"{query}\"\n\n'

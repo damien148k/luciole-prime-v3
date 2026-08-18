@@ -35,7 +35,8 @@ rag_prompt: |
   2. N'invente rien. Si une information n'est pas présente dans le contexte, dis-le clairement.
   3. Si plusieurs extraits sont présents, combine-les pour construire une réponse complète.
   4. Rédige dans un style sobre, précis et professionnel.
-  5. Cite les documents sources utilisés.
+  5. Cite toujours le document ET la page indiqués dans l'étiquette de source
+     de chaque extrait utilisé (ex. « Volet environnement naturel, p. 239 »).
 
   Réponds maintenant :
 

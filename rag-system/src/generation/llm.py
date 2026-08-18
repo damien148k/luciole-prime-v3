@@ -218,6 +218,21 @@ class LLMGenerator:
         return f"{base}\n\n{custom_prompt}" if custom_prompt else base
 
     def _format_rag_prompt(self, context: str, query: str) -> str:
+        # Le gabarit configurable vit dans config/prompts.yaml (cle rag_prompt).
+        # Avant : cette methode ignorait le YAML et renvoyait un texte code en
+        # dur, si bien qu'editer rag_prompt n'avait aucun effet sur le chat —
+        # piege pour quiconque configure une instance en croyant l'editer.
+        # Le repli ci-dessous conserve l'exigence de citation de la page, qui
+        # manquait au gabarit YAML avant son alignement.
+        if self.prompts_config:
+            try:
+                template = self.prompts_config.get_rag_prompt()
+                if template and template.strip():
+                    return self.prompts_config.format_rag_prompt(context, query)
+            except Exception as e:
+                logger.warning(
+                    f"rag_prompt YAML inutilisable ({e}), repli sur le gabarit integre"
+                )
         return (
             f"Voici des extraits de documents pertinents :\n\n{context}\n\n---\n\n"
             f"Question : {query}\n\n"
