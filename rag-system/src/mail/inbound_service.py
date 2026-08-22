@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 import traceback
 import uuid
@@ -24,13 +23,12 @@ from .constants import (
     ALLOWED_ATTACHMENT_EXTENSIONS,
     AuditAction,
     AuditOutcome,
-    EmailCategory,
     InboundStatus,
     RoutingDecision,
 )
 from .db import init_tables
 from .draft_service import DraftService
-from .exceptions import DuplicateMessageError, ParseError
+from .exceptions import ParseError
 from .imap_client import IMAPClient
 from .models import (
     Attachment,

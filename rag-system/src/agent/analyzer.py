@@ -3,10 +3,9 @@ Document Analyzer - Analyse avancée de documents
 Orchestrateur principal de l'agent Luciole
 """
 
-import os
 import time
 import hashlib
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 from pathlib import Path
 from collections import defaultdict
 from loguru import logger

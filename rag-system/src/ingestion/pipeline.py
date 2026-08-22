@@ -7,12 +7,10 @@ Avec support de reprise après interruption
 # L'état d'indexation est géré exclusivement par le StateStore SQLite du watcher.
 
 import os
-import hashlib
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Dict, Optional, Set
-from datetime import datetime
+from typing import List, Dict, Optional
 import yaml
 from loguru import logger
 
@@ -728,7 +726,6 @@ class IngestionTracker:
     """
 
     def __init__(self, index_name: str, db_dir: str = "/app/data"):
-        import sqlite3
         from pathlib import Path
         self.index_name = index_name
         db_path = Path(db_dir) / f"tracker_{index_name}.db"

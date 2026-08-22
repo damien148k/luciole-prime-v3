@@ -1,5 +1,5 @@
 """Metrics Store — Interface simplifiée pour l'évaluation RAGAS."""
-from typing import Optional, Dict
+from typing import Dict
 from loguru import logger
 
 

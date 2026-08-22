@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import traceback
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
@@ -17,10 +16,8 @@ from loguru import logger
 from .constants import DRAFT_EXPIRY_DAYS, DraftStatus, InboundStatus, OutboundStatus
 from .db import db_cursor, now_utc, row_to_dict
 from .models import (
-    AuditLog,
     Attachment,
     ClassificationResult,
-    DeadLetter,
     DraftApproval,
     InboundMessage,
     MailSettings,

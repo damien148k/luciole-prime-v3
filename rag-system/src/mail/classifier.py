@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from typing import Optional
 
 import httpx
@@ -236,7 +235,6 @@ JSON attendu (et rien d'autre) :
         """
         try:
             # Récupérer le modèle configuré (fallback sur qwen3-30b-a3b-instruct)
-            from .config import AGENT_URL
             try:
                 import yaml
                 with open("/app/config/settings.yaml") as f:

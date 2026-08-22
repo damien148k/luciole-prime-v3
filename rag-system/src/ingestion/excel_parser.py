@@ -8,7 +8,7 @@ Excel Parser pour Luciole RAG
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 import pandas as pd
 from loguru import logger
 

@@ -6,12 +6,9 @@ Version améliorée avec ExcelParser pour préserver la structure tabulaire
 
 import os
 import re
-import signal
-import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from loguru import logger
 import yaml
 
@@ -20,7 +17,6 @@ import pymupdf
 import pymupdf4llm
 from docx import Document as DocxDocument
 from pptx import Presentation
-import openpyxl
 import pandas as pd
 import extract_msg
 from striprtf.striprtf import rtf_to_text

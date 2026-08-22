@@ -7,7 +7,6 @@ V3 : auto-device via resolve_device(), support BGE-M3 + E5
 import os
 from typing import List, Optional
 from pathlib import Path
-import torch
 from sentence_transformers import SentenceTransformer
 from loguru import logger
 

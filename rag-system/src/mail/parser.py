@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import unicodedata
 from email import message_from_bytes, policy
 from email.header import decode_header
 from email.message import Message
@@ -24,7 +23,7 @@ from .constants import (
     AUTO_REPLY_SUBJECT_PATTERNS,
     BLOCKED_ATTACHMENT_EXTENSIONS,
 )
-from .exceptions import AttachmentRejectedError, ParseError
+from .exceptions import ParseError
 from .models import ParsedAttachment, ParsedEmail
 
 

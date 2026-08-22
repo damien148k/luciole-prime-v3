@@ -22,18 +22,16 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from .approval_service import ApprovalService
-from .config import decrypt_secret, encrypt_secret
-from .constants import AuditAction, AuditOutcome, InboundStatus
+from .config import encrypt_secret
+from .constants import AuditAction, AuditOutcome
 from .db import init_tables
 from .exceptions import (
     DraftAlreadyReviewedError,
     DraftNotFoundError,
-    MailNotConfiguredError,
 )
 from .imap_client import IMAPClient
 from .inbound_service import InboundService
 from .models import MailSettings, MailTestRun
-from .outbound_service import OutboundService
 from .smtp_client import SMTPClient
 from .state import (
     AuditRepo,
