@@ -247,10 +247,19 @@ _MOTS_VIDES = frozenset({
 # Termes structurels des noms de tomes : présents dans tous les fichiers
 # du corpus (projet, étude, impact...), ils ne discriminent rien et ne
 # doivent jamais déclencher ni composer une requête d'inventaire.
+# Liste volontairement générique au domaine étude d'impact : les termes
+# propres au projet du corpus courant (nom du parc, de la commune, du
+# porteur...) se déclarent par instance via la variable d'environnement
+# QUERY2_TERMES_STRUCTURANTS="fort,paniere" — mesuré sur la Panière du
+# Fort : sans eux, les requêtes d'inventaire forcé incluent le nom du
+# projet, présent dans tous les titres, et se diluent.
 _TERMES_STRUCTURANTS = frozenset({
-    "projet", "volet", "tome", "rnt", "fort", "panere", "paniere",
-    "panier", "impact", "impacts", "environnement",
-})
+    "projet", "volet", "tome", "rnt", "impact", "impacts", "environnement",
+}) | frozenset(
+    t.strip().lower()
+    for t in os.environ.get("QUERY2_TERMES_STRUCTURANTS", "").split(",")
+    if t.strip()
+)
 
 
 def _normaliser_mot(mot: str) -> str:

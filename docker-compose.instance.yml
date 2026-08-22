@@ -72,6 +72,10 @@ services:
       - SENTENCE_TRANSFORMERS_HOME=/app/models/huggingface
       - CONFIG_PATH=/app/config/settings.yaml
       - MULTI_INDEX_MODE=false
+      # Termes propres au projet du corpus (nom du parc, commune, porteur)
+      # a exclure des requetes d'inventaire query2, separes par virgules.
+      # Exemple : QUERY2_TERMES_STRUCTURANTS=fort,paniere
+      - QUERY2_TERMES_STRUCTURANTS=${QUERY2_TERMES_STRUCTURANTS:-}
     volumes:
       - ./config:/app/config:ro
       - ./data:/app/data:ro
