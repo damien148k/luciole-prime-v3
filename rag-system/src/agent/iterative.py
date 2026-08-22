@@ -113,6 +113,63 @@ CATALOGUE_COUVERTURE_ACTIF = (
 # caractères occupent déjà ~5k tokens sur la fenêtre 16k.
 CATALOGUE_PROMPT_MAX_TITRES = 100
 
+# Garde-fou : contradiction entre le juge de couverture (étape 2, lit les
+# passages) et le générateur de la route classique (étape 1, déjà exécuté
+# dans result_a avant que le juge ne rende son verdict). Mesuré le 22 août
+# 2026 sur Beaumont Sud (cas beaumont-09, corridor écologique/TVB) : le
+# juge a rendu COUVERT alors que la réponse générée esquivait elle-même
+# la question (le passage précis — mesure ECO-E1 — n'était pas dans le
+# sous-ensemble retenu pour la génération, bien qu'un autre extrait du
+# même tome le soit). Sans ce garde-fou, la recherche B ne se déclenche
+# jamais dans ce cas puisqu'elle ne dépend que du verdict du juge.
+# Désactivable par QUERY2_GARDE_CONTRADICTION=false pour mesurer l'apport
+# de ce garde-fou seul, chemin nominal sinon inchangé.
+GARDE_CONTRADICTION_ACTIF = (
+    os.environ.get("QUERY2_GARDE_CONTRADICTION", "true").lower() == "true"
+)
+
+# Motif d'esquive sur le TEXTE DE RÉPONSE généré (pas sur les passages).
+# Volontairement aligné sur exporter_echanges.verdict() (évaluation) pour
+# que le garde-fou système et la mesure utilisent le même critère — mais
+# avec un motif de citation élargi : voir _SOURCE_CITEE_REPONSE ci-dessous.
+_ESQUIVE_REPONSE = re.compile(
+    r"n(?:e |')(?:contien(?:t|nent)|mentionn(?:e|ent)|fourni(?:t|ssent)|"
+    r"permet(?:tent)?|cite(?:nt)?|precise(?:nt)?|indique(?:nt)?|"
+    r"detaille(?:nt)?|comporte(?:nt)?|evoque(?:nt)?|abord(?:e|ent)) "
+    r"(?:pas|aucun)|"
+    r"n'en parle(?:nt)? pas|"
+    r"(?:n'est|ne sont) pas (?:explicitement )?"
+    r"(?:mentionn|precis|indiqu|detaill|abord)|"
+    r"aucune information|aucune mention|aucune precision|aucun element|"
+    r"pas d'information|pas de mention|pas de precision|"
+    r"reste(?:nt)? muet|est absente? d|sont absentes? d", re.I)
+
+# Motif de citation élargi. L'ancien motif (\.pdf|tome[_ ]?\d|source\s*:)
+# produisait un faux positif mesuré sur Beaumont Sud (cas beaumont-11) :
+# la génération citait "Volet environnement naturel, p. 460" ou "RNT,
+# p. 62" — jamais littéralement "Tome 4" ni un nom de fichier .pdf — donc
+# une réponse sourcée à 4 reprises était comptée comme non sourcée.
+_SOURCE_CITEE_REPONSE = re.compile(
+    r"\.pdf|tome[_ ]?\d|\[?source\s*:|"
+    r"volet\s+(?:environnement|milieu|paysage)|\bRNT\b|p\.\s*\d+", re.I)
+
+
+def _reponse_esquive(texte: str) -> bool:
+    """Détecte si le texte généré esquive la question (mêmes seuils que
+    exporter_echanges.verdict() : position du motif < 15% du texte, ou
+    texte < 700 caractères, ou aucune source citée)."""
+    if not texte:
+        return True
+    m = _ESQUIVE_REPONSE.search(texte)
+    if not m:
+        return False
+    return (
+        m.start() / len(texte) < 0.15
+        or len(texte) < 700
+        or not _SOURCE_CITEE_REPONSE.search(texte)
+    )
+
+
 SUJET_SYSTEM_PROMPT = (
     "Tu extrais le sujet d'une demande en quelques mots. Tu réponds "
     "uniquement avec le sujet, sans commentaire."
@@ -598,6 +655,30 @@ class IterativePipeline:
             f"query2: couverture={couverture['verdict']}, "
             f"requetes={couverture['requetes']}"
         )
+
+        # ---------------- Garde-fou : contradiction juge/generateur ------
+        # result_a["response"] est deja la reponse de la route classique
+        # (generee en etape 1, avant meme l'analyse de couverture). Si le
+        # juge dit COUVERT mais que cette reponse esquive elle-meme la
+        # question, on force un verdict PARTIEL pour declencher la
+        # recherche B malgre tout. A defaut de "manques" fournis par le
+        # juge (verdict COUVERT => requetes vide par construction), on
+        # utilise la demande d'origine comme seule requete ciblee.
+        if (
+            GARDE_CONTRADICTION_ACTIF
+            and couverture["verdict"] == "COUVERT"
+            and _reponse_esquive(result_a.get("response", ""))
+        ):
+            logger.warning(
+                "query2: contradiction juge/generateur detectee (verdict "
+                "COUVERT mais reponse esquive) -> recherche B forcee"
+            )
+            couverture = dict(couverture)
+            couverture["verdict"] = "PARTIEL"
+            couverture["contradiction_forcee"] = True
+            if not couverture.get("requetes"):
+                couverture["requetes"] = [query]
+            trace["couverture"] = couverture
 
         if couverture["verdict"] == "COUVERT" or not couverture["requetes"] or max_rounds < 1:
             # Propriété de sécurité : la réponse retournée EST la réponse
