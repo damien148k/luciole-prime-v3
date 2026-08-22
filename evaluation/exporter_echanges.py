@@ -88,7 +88,16 @@ ESQUIVE = re.compile(
 # Le souligne n'est pas obligatoire : le modele ecrit "Tome 4, page 1"
 # aussi souvent que "tome_4.pdf". Exiger tome_\d faisait passer une
 # reponse correctement sourcee pour une reponse sans source.
-SOURCE_CITEE = re.compile(r"\.pdf|tome[_ ]?\d|\[?source\s*:", re.I)
+# Motif elargi (mesure Beaumont Sud, cas beaumont-11, 22 aout 2026) : le
+# pipeline query2 cite parfois les sources par leur intitule de volet
+# plutot que par "Tome N" ou un nom de fichier .pdf, ex. "Volet
+# environnement naturel, p. 460" ou "RNT, p. 62". L'ancien motif ne les
+# reconnaissait pas, ce qui comptait a tort une reponse sourcee comme
+# non sourcee et forcait un verdict ESQUIVE via la clause SOURCE_CITEE
+# de verdict() ci-dessous.
+SOURCE_CITEE = re.compile(
+    r"\.pdf|tome[_ ]?\d|\[?source\s*:|"
+    r"volet\s+(?:environnement|milieu|paysage)|\bRNT\b|p\.\s*\d+", re.I)
 
 
 def verdict(texte):
