@@ -1098,38 +1098,6 @@ async def post_synonyms(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/admin/query-rewriter")
-async def get_query_rewriter():
-    """Read BUSINESS_RULES list from query_rewriter.py."""
-    candidates = [
-        os.path.join("src", "query_rewriter.py"),
-        os.path.join("/app", "src", "query_rewriter.py"),
-        os.path.join("rag-system", "src", "query_rewriter.py"),
-    ]
-    filepath = None
-    for c in candidates:
-        if os.path.exists(c):
-            filepath = c
-            break
-    if not filepath:
-        raise HTTPException(status_code=404, detail="query_rewriter.py not found")
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
-        import re
-        match = re.search(
-            r'BUSINESS_RULES\s*(?::\s*[^=]*)?\s*=\s*\[(.*?)\]',
-            content,
-            re.DOTALL,
-        )
-        if match:
-            raw = match.group(1)
-            rules = re.findall(r'["\']([^"\']*)["\']', raw)
-        else:
-            rules = []
-        return JSONResponse(content={"rules": rules, "file": filepath})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/admin/restart")
@@ -1414,7 +1382,7 @@ async def batch_evaluate_ragas(req: RagasBatchRequest):
         try:
             async with httpx.AsyncClient(timeout=300.0) as client:
                 resp = await client.post(
-                    f"{agent_url}/api/query",
+                    f"{agent_url}/api/query2",
                     json={"query": question, "top_k": 20, "rerank": True}
                 )
                 if resp.status_code == 200:
@@ -1515,7 +1483,7 @@ async def evaluate_feedbacks_ragas():
         try:
             async with httpx.AsyncClient(timeout=300.0) as client:
                 resp = await client.post(
-                    f"{agent_url}/api/query",
+                    f"{agent_url}/api/query2",
                     json={"query": question, "top_k": 20, "rerank": True}
                 )
                 if resp.status_code == 200:
@@ -1676,7 +1644,6 @@ def _build_ragas_analysis(results: list) -> dict:
         actions = [
             f"PROMPT : Ajouter dans le system prompt une consigne de precision. Exemple : 'Reponds directement a la question posee, de maniere precise et structuree.' (via Config UI > System Prompt)",
             f"MAX_TOKENS : Actuellement {cur_max_tokens}. Si les reponses semblent tronquees, augmenter a {sug_max_tokens}.",
-            "QUERY REWRITING : Verifier que le query rewriting est actif (Config UI > query_rewriter.py). Si les questions sont ambigues ou en langage naturel, le rewriting les reformule pour la recherche.",
             "SYNONYMES : Ajouter des synonymes metier dans Config UI > synonyms.txt pour que le systeme comprenne les termes specifiques a votre domaine.",
         ]
 
@@ -4133,4 +4100,3 @@ if __name__ == "__main__":
     print("  http://localhost:8002")
     print("=" * 60)
     uvicorn.run(app, host="0.0.0.0", port=8080)
-

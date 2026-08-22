@@ -15,8 +15,8 @@ CE QUE CE TEST NE PEUT PAS FAIRE, lu dans le code avant de l'ecrire :
 
   - OptionsModel (src/agent/api.py) n'a que detail_level, max_items et
     include_sources. /api/analyze ne peut donc PAS porter de
-    custom_prompt. La route utilisee ici est /api/query, seule a exposer
-    ce champ,
+    custom_prompt. La route utilisee ici est /api/query2, qui expose ce
+    champ,
   - le champ top_k de la requete ne regle pas la profondeur de recherche :
     api.py le convertit en options["max_items"], que _analyze_chat ne
     recoit pas. La profondeur vient de
@@ -107,7 +107,7 @@ ESQUIVE = re.compile(
 def poster(charge, timeout=900):
     donnees = json.dumps(charge, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
-        API + "/api/query", data=donnees,
+        API + "/api/query2", data=donnees,
         headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
@@ -123,12 +123,8 @@ def main():
     lignes = [
         f"CAMPAGNE {LABEL} : consigne de generation, avec et sans",
         "=" * 78,
-        "route /api/query   enable_rewriting=false",
-        "Profondeur de recherche : 100 passages, imposee par",
-        "LIMITS['standard']['max_total_chunks'] (analyzer.py l.35).",
-        "Le champ top_k de la requete ne la regle PAS : api.py le",
-        "convertit en options['max_items'], et analyzer.py l.139 ne",
-        "transmet pas max_items a _analyze_chat.",
+        "route /api/query2",
+        "Le pipeline iteratif pilote sa profondeur de recherche.",
         "Seule difference entre les deux bras : la consigne.",
         "Metrique principale : les esquives, pas le bon tome.",
         "Verdict de reference : verdict() a trois etats, importe de",
@@ -152,7 +148,6 @@ def main():
                 charge = {
                     "query": c.get("remarque_mrae") or "",
                     "top_k": TOP_K,
-                    "enable_rewriting": False,
                     "deep_search": False,
                 }
                 if bras == "avec":

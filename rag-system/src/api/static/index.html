@@ -594,7 +594,7 @@
             searchBtn.disabled = true;
             
             try {
-                const res = await fetch(`${API_BASE}/api/query`, {
+                const res = await fetch(`${API_BASE}/api/query2`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query, top_k: 5, rerank: true })
@@ -604,7 +604,7 @@
                 
                 responseText.textContent = data.response;
                 
-                const confidence = Math.round(data.confidence * 100);
+                const confidence = Math.round((data.confidence || 0) * 100);
                 confidenceFill.style.width = `${confidence}%`;
                 confidenceValue.textContent = `${confidence}%`;
                 
@@ -670,4 +670,3 @@
     </script>
 </body>
 </html>
-
