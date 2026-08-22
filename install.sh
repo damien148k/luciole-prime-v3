@@ -360,14 +360,6 @@ HF_HUB_OFFLINE=1
 TRANSFORMERS_OFFLINE=1
 CUDA_VISIBLE_DEVICES=0
 
-
-# Route empruntee par l'interface de chat.
-#   agent      boucle agentique bornee, /api/agent/run
-#   classique  pipeline procedural en une passe, /api/query
-# Voir docs/REDEPLOIEMENT.md. Defaut agent, pour ne rien changer aux
-# instances en place.
-CHAT_ROUTE=agent
-
 # Auth
 AUTH_SECRET=$SECRET
 ENVEOF

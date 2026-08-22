@@ -1,7 +1,7 @@
 # Consigne de generation pour un avis d'autorite environnementale
 
 Colle ce texte dans le prompt personnalise de l'interface de chat, ou
-transmets-le en `custom_prompt` sur `/api/query`.
+transmets-le en `custom_prompt` sur `/api/query2`.
 
 ## Ce que cette consigne change, mesure
 

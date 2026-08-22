@@ -139,10 +139,6 @@ services:
       - TZ=${TZ:-Europe/Paris}
       - INSTANCE_NAME=${INSTANCE_NAME}
       - AGENT_URL=http://agent:8000
-      # Route empruntee par le chat : query2 pour le pipeline iteratif
-      # (defaut, mesure du 9 aout 2026), classique et agent en repli
-      # d'urgence. Voir CHAT_ROUTE en tete de rag-system/src/api/chat_ui.py.
-      - CHAT_ROUTE=${CHAT_ROUTE:-query2}
     volumes:
       - ./config:/app/config:ro
     ports:

@@ -131,15 +131,12 @@ de code unifiée.
   `luciole_shared` : `docker-compose.shared-llm.yml`,
   `docker-compose.shared-llm.gx10.yml`, `docker-compose.instance.yml`,
   `docker-compose.instance.gx10.yml`.
-- Mécanisme **`BUSINESS_PROFILE`** et dossier `config/profiles/` (profils
-  `generic`, `eolien`, `horlogerie`, `crm`, `petrochimie`).
 - `MIGRATION_GUIDE.md` (v2 → v3) et ce `CHANGELOG.md`.
 
 ### Changed
 
-- `BUSINESS_RULES` du query rewriter neutralisé par défaut (`[]`) pour un
-  positionnement multi-métier. Les 15 règles éolien / ICPE historiques sont
-  archivées dans `config/profiles/query_rewriter.eolien.py`.
+- Le système de profils métier et la réécriture de requêtes ont été retirés
+  lors du passage au chemin query2 uniquement.
 - Contrat LLM unifié (`agent/api.py`, `generation/llm.py`, `mail/*`,
   `watcher/config.py`) : Ollama et TensorRT-LLM interchangeables via `LLM_URL`
   (OpenAI-compatible). Tout autre backend OpenAI-compatible (LM Studio, vLLM…)

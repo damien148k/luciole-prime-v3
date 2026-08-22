@@ -96,7 +96,7 @@ Conçue pour les entreprises françaises et européennes qui souhaitent **garder
 | ARM64 GX10 / GB10 (partagé) | `docker-compose.shared-llm.gx10.yml` | TensorRT-LLM | N métiers |
 | ARM64 — une instance métier | `docker-compose.instance.gx10.yml` | (réseau `luciole_shared`) | 1 par métier |
 
-Le déploiement multi-instances repose sur un réseau Docker externe `luciole_shared` : **1 backend TensorRT-LLM ↔ N instances métier**, chacune avec son propre index (voir `MULTI_INDEX_MODE`). Chaque métier peut charger ses propres règles de *query rewriting* via `BUSINESS_PROFILE` (voir `config/profiles/README.md`).
+Le déploiement multi-instances repose sur un réseau Docker externe `luciole_shared` : **1 backend TensorRT-LLM ↔ N instances métier**, chacune avec son propre index (voir `MULTI_INDEX_MODE`).
 
 ---
 
@@ -159,7 +159,6 @@ Les identifiants admin sont sauvegardés dans `INSTANCE_CREDENTIALS.txt` à la r
 - 🖥️ [Guide d'installation GX10 / DGX Spark](GUIDE_INSTALLATION_GX10.md) — ARM64 / Blackwell, LLM partagé + multi-instances
 - 🔀 [Guide de migration v2 → v3](MIGRATION_GUIDE.md) — passer de la mono-instance à l'architecture v3
 - 📝 [Journal des modifications](CHANGELOG.md) — historique des versions
-- 🎯 [Profils métier](config/profiles/README.md) — mécanisme `BUSINESS_PROFILE`
 - 🔧 [Configuration de référence](config/) — fichiers `settings.yaml`, `prompts.yaml`, `synonyms.txt`
 - 🐳 Docker Compose — `docker-compose.legacy.yml` (mono) · `docker-compose.shared-llm*.yml` + `docker-compose.instance*.yml` (multi)
 - 🔐 [Politique de sécurité](SECURITY.md) — comment signaler une vulnérabilité
@@ -205,7 +204,6 @@ Avec Luciole, vous gardez le contrôle :
 - [x] Ingestion PDF/Word/Excel/Markdown
 - [x] Backend TensorRT-LLM (ARM64/Blackwell GX10/GB10)
 - [x] Architecture LLM partagé + N instances métier
-- [x] Profils métier via `BUSINESS_PROFILE`
 - [ ] Connecteurs SharePoint et Confluence
 - [ ] Orchestrateur multi-instances (provisioning automatisé)
 - [ ] Fine-tuning LoRA par métier (v3.1)
