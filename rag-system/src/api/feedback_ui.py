@@ -243,9 +243,7 @@ async def get_logo_svg():
 
 @app.post("/api/feedback")
 async def submit_feedback(feedback: FeedbackRequest):
-    """Enregistre un feedback dans la base de données.
-    Si le feedback est negatif (down), declenche une evaluation RAGAS en arriere-plan.
-    """
+    """Enregistre un feedback dans la base de données."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -274,69 +272,6 @@ async def submit_feedback(feedback: FeedbackRequest):
     except Exception as e:
         logger.error(f"Erreur enregistrement feedback: {e}")
         return {"status": "error", "message": str(e)}
-
-
-async def _trigger_ragas_on_negative(question: str, answer: str, sources_json: str, index_name: str):
-    """Fire-and-forget RAGAS evaluation when user gives thumbs down."""
-    import asyncio
-    try:
-        contexts = []
-        if sources_json:
-            try:
-                raw = json.loads(sources_json)
-                if isinstance(raw, list):
-                    for item in raw:
-                        if isinstance(item, dict):
-                            text = item.get("content", "") or item.get("text", "") or item.get("snippet", "")
-                            if text:
-                                contexts.append(text[:2000])
-                        elif isinstance(item, str):
-                            contexts.append(item[:2000])
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        if not contexts:
-            logger.info("RAGAS auto-eval skipped: no contexts available")
-            return
-
-        llm_url = os.environ.get("LLM_URL", os.environ.get("OLLAMA_URL", "http://tensorrt-llm:8000"))
-        ragas_db = os.environ.get("RAGAS_DB_PATH", "/app/feedbacks/ragas.db")
-
-        try:
-            import yaml as _yaml
-            settings_path = "/app/config/settings.yaml"
-            if os.path.exists(settings_path):
-                with open(settings_path) as f:
-                    _settings = _yaml.safe_load(f)
-                ragas_cfg = _settings.get("ragas", {})
-                eval_model = ragas_cfg.get("eval_model", "qwen3-30b-a3b-instruct")
-                embed_model = ragas_cfg.get("embed_model", "nomic-embed-text")
-            else:
-                eval_model = "qwen3-30b-a3b-instruct"
-                embed_model = "nomic-embed-text"
-        except Exception:
-            eval_model = "qwen3-30b-a3b-instruct"
-            embed_model = "nomic-embed-text"
-
-        from evaluation.ragas_evaluator import LucioleRAGASEvaluator
-        evaluator = LucioleRAGASEvaluator(
-            llm_url=llm_url, model=eval_model, embed_model=embed_model, db_path=ragas_db
-        )
-        loop = asyncio.get_event_loop()
-        scores = await loop.run_in_executor(
-            None, evaluator.evaluate_single,
-            question, answer, contexts, index_name or "documents"
-        )
-        parts = []
-        for k, label in [("faithfulness", "faith"), ("answer_relevancy", "rel"), ("context_recall", "recall")]:
-            v = scores.get(k)
-            if v is not None and not (isinstance(v, float) and (v != v)):  # NaN check
-                parts.append(f"{label}={v:.3f}")
-        logger.info(f"RAGAS auto-eval (negative feedback): {' '.join(parts) or 'no scores'} q='{question[:80]}'")
-    except ImportError:
-        logger.warning("RAGAS auto-eval skipped: ragas/langchain dependencies not installed")
-    except Exception as e:
-        logger.error(f"RAGAS auto-eval failed: {e}")
 
 
 @app.get("/api/feedbacks")
