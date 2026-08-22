@@ -325,7 +325,7 @@ Ce prompt est stocke dans `config/prompts.yaml` sous `system_prompt`.
 - **System Prompt** : personnalisez le comportement de l'IA
 - **Synonymes** : ajoutez des synonymes metier pour ameliorer la recherche
 - **Modeles Ollama** : installez, activez, supprimez des modeles LLM
-- **Parametres** : modifiez settings.yaml, query_rewriter.py
+- **Parametres** : modifiez settings.yaml
 - **Dashboard feedbacks** : consultez et exportez les feedbacks des key users
 
 ### API REST (port 8000)

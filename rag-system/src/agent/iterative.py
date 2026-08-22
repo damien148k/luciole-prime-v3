@@ -455,10 +455,11 @@ def _etiquette_passage(chunk: Dict) -> str:
 
 
 class IterativePipeline:
-    """Pipeline itératif v2. Encapsule l'analyzer de la route classique :
-    toute la recherche et la génération passent par analyzer.analyze(),
-    exactement comme /api/query. Seule l'analyse de couverture est du
-    code nouveau."""
+    """Pipeline itératif query2.
+
+    Il encapsule l'analyzer pour la recherche et la génération, puis ajoute
+    l'analyse de couverture et, si nécessaire, une recherche ciblée.
+    """
 
     def __init__(self, analyzer, catalogue: Optional[CatalogueDocuments] = None):
         self.analyzer = analyzer

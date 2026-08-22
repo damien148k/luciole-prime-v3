@@ -19,8 +19,6 @@ CE QU'IL ECRIT
       settings.yaml            configuration effective, secrets masques
       prompts.yaml             si present
       synonyms.txt             si present
-      query_rewriter.py        si present, monte depuis config
-      profil_<nom>.yaml        le profil agent reellement resolu
       environnement.txt        variables du conteneur, secrets masques
       modeles.json             modeles Ollama servis, avec empreintes
       index.json              index OpenSearch et collections Qdrant
@@ -56,7 +54,6 @@ SRC = "/app/src"
 EVAL = os.environ.get("EVAL_DIR", "/app/evaluation")
 DATA = "/app/data"
 INSTANCE = os.environ.get("INSTANCE_NAME", "instance")
-PROFIL = os.environ.get("AGENT_PROFILE", "generic")
 LLM_URL = os.environ.get("LLM_URL", "http://ollama:11434")
 OS_URL = os.environ.get("OPENSEARCH_URL", "http://opensearch:9200")
 QD_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
@@ -121,10 +118,9 @@ def empreinte_fichier(chemin):
 
 
 def copier_config():
-    """Configuration, secrets masques, plus le profil agent resolu."""
+    """Configuration et secrets masques."""
     releve = {}
-    for nom in ("settings.yaml", "prompts.yaml", "synonyms.txt",
-                "query_rewriter.py"):
+    for nom in ("settings.yaml", "prompts.yaml", "synonyms.txt"):
         source = os.path.join(CONFIG, nom)
         if not os.path.exists(source):
             notes.append(f"absent de {CONFIG} : {nom}")
@@ -139,19 +135,6 @@ def copier_config():
         notes.append("config/auth.yaml existe et n'est PAS recopie : "
                      "il porte les comptes. A transporter a la main.")
 
-    # Le profil agent reellement resolu, pas celui qu'on suppose.
-    trouve = False
-    for dossier in (os.path.join(CONFIG, "agent_profiles"), CONFIG):
-        p = os.path.join(dossier, f"{PROFIL}.yaml")
-        if os.path.exists(p):
-            shutil.copy2(p, os.path.join(PAQUET, f"profil_{PROFIL}.yaml"))
-            releve[f"profil_{PROFIL}.yaml"] = len(
-                open(p, encoding="utf-8", errors="replace").read().splitlines())
-            trouve = True
-            break
-    if not trouve:
-        notes.append(f"AGENT_PROFILE={PROFIL} mais aucun {PROFIL}.yaml trouve "
-                     f"dans {CONFIG}/agent_profiles ni {CONFIG}")
     return releve
 
 

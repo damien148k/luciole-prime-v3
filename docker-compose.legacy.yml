@@ -151,7 +151,6 @@ services:
     - ./feedbacks:/app/feedbacks
     - ./evaluation:/app/evaluation
     - ./models/huggingface:/app/models/huggingface
-    - ./config/query_rewriter.py:/app/src/retrieval/query_rewriter.py
     - ./backups:/app/backups
     ports:
     - ${API_PORT:-8000}:8000
@@ -245,10 +244,6 @@ services:
     - TZ=${TZ:-Europe/Paris}
     - INSTANCE_NAME=${INSTANCE_NAME}
     - AGENT_URL=http://agent:8000
-    # Route empruntee par le chat : query2 pour le pipeline iteratif
-    # (defaut, mesure du 9 aout 2026), classique et agent en repli
-    # d'urgence. Voir CHAT_ROUTE en tete de rag-system/src/api/chat_ui.py.
-    - CHAT_ROUTE=${CHAT_ROUTE:-query2}
     - HF_HUB_OFFLINE=1
     - TRANSFORMERS_OFFLINE=1
     volumes:
@@ -292,7 +287,6 @@ services:
     volumes:
     - ./config:/app/config
     - ./feedbacks:/app/feedbacks
-    - ./config/query_rewriter.py:/app/src/retrieval/query_rewriter.py
     ports:
     - ${FEEDBACK_PORT:-8503}:8503
     command:

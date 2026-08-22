@@ -46,12 +46,9 @@ COMMIT = "9b411a5"
 REFERENCE = {
     "src/__init__.py": "386535dc51b50fd347cf18fc0b5ae2ccd597e637",
     "src/agent/__init__.py": "415dee60301b19a19a886545efdf35c98eeb900d",
-    "src/agent/agent_profiles.py": "7a259e80566a3b56cd35b96178add0a3d89caa69",
     "src/agent/analyzer.py": "205a7e8022472b805e44f94f1277935bfe29ebc9",
     "src/agent/api.py": "0564bdbc1cb51f1c5c30b15499de41a664947ccd",
     "src/agent/classifier.py": "d788073e7db237e0bda6d5244ea0256e37afa6fb",
-    "src/agent/orchestrator.py": "5f5085b52badb39eaa12248e5445f64e34a718f7",
-    "src/agent/tools.py": "8122a75559f797eccc21d52c2cd5193493f50d96",
     "src/api/__init__.py": "2603cda5f72c80b149acd88ff91eb4d3b8ec12e4",
     "src/api/admin_ui.py": "99047cfe18626085f648df666edbf2520edeaf53",
     "src/api/auth.py": "2a71b67028125b341e8bb3bffc0f7ada83df8b62",
@@ -97,7 +94,6 @@ REFERENCE = {
     "src/retrieval/dense_search.py": "25d7faee44ab16ff8e5bd0e23343c2dedde0b62b",
     "src/retrieval/hybrid.py": "0d49632ad517de02254554116e2e48e055c29793",
     "src/retrieval/query_engine.py": "1cdfa70e56b680a08fcb91e5c7c3061f29a75656",
-    "src/retrieval/query_rewriter.py": "957a6322b2dd93e26edd321bd9e325b32d145683",
     "src/retrieval/reranker.py": "665122054b5e65a6930c39aecc7597b23b8c97d0",
     "src/utils/__init__.py": "8b137891791fe96927ad78e64b0aad7bded08bdc",
     "src/utils/device.py": "3884b26b15cdeedc70cb0b42f0e03a75adfecff7",
@@ -120,9 +116,7 @@ REFERENCE = {
     "src/watcher/worker.py": "b3d062da473c5987f83e85c22026268ca845255c",
 }
 
-# Fichier monte par docker-compose par dessus la source, il differe de main
-# par construction : ./config/query_rewriter.py:/app/src/retrieval/query_rewriter.py
-MONTES = {"src/retrieval/query_rewriter.py"}
+MONTES = set()
 
 
 def empreinte_git(chemin):
@@ -194,17 +188,7 @@ def _bloc(chemin, entete):
 
 
 def marqueurs():
-    """Trois marqueurs, chacun lu a l'endroit exact qui produit l'effet.
-
-    Le premier controle du reecriveur cherchait la chaine query_rewriter
-    dans tout orchestrator.py. Faux positif garanti : sur main, la classe
-    AgentOrchestrator garde un parametre query_rewriter optionnel, ligne
-    104, et le pipeline procedural s'en sert. Ce n'est pas la que se joue
-    l'injection. Elle se joue dans get_orchestrator de src/agent/api.py,
-    la seule fonction qui construit l'orchestrateur de la boucle : sur
-    main au commit 7dbdbac, elle ne passe plus l'argument. C'est donc ce
-    bloc, et lui seul, qui est examine ici.
-    """
+    """Marqueurs lus directement dans les fichiers du conteneur."""
     print("=" * 78)
     print("MARQUEURS, LUS DANS LES FICHIERS DU CONTENEUR")
     print("=" * 78)
@@ -224,14 +208,6 @@ def marqueurs():
     else:
         print("  pages recopiees dans _extract_sources :", "page_start" in bloc)
 
-    api = "/app/src/agent/api.py"
-    bloc = _bloc(api, "def get_orchestrator(")
-    if bloc is None:
-        print("  get_orchestrator introuvable dans api.py")
-    else:
-        injecte = bool(re.search(r"query_rewriter\s*=", bloc))
-        print("  reecriveur injecte dans la boucle     :", injecte)
-    print()
 
 
 def config_llm():

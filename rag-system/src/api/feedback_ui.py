@@ -182,7 +182,6 @@ class ChatRequest(BaseModel):
     index_name: Optional[str] = None
     top_k: int = 20
     custom_prompt: Optional[str] = None
-    enable_rewriting: bool = True
     deep_search: bool = False
     history: list[ChatMessage] = []
 
@@ -616,7 +615,6 @@ CONFIG_FILES = {
     "settings.yaml": "/app/config/settings.yaml",
     "prompts.yaml": "/app/config/prompts.yaml",
     "synonyms.txt": "/app/config/synonyms.txt",
-    "query_rewriter.py": "/app/src/retrieval/query_rewriter.py",
 }
 
 READONLY_FILES = {}
@@ -725,13 +723,12 @@ async def query(request: ChatRequest):
         
         async with httpx.AsyncClient(timeout=1800.0) as client:
             response = await client.post(
-                f"{AGENT_URL}/api/query",
+                f"{AGENT_URL}/api/query2",
                 json={
                     "query": request.query,
                     "index_name": request.index_name,
                     "top_k": request.top_k,
                     "custom_prompt": request.custom_prompt,
-                    "enable_rewriting": request.enable_rewriting,
                     "deep_search": request.deep_search,
                     "history": history_list
                 }
@@ -2626,10 +2623,6 @@ async def config_page():
                     <strong>synonyms.txt</strong>
                     <p>Synonymes métier pour la recherche. Format: "terme1, terme2, terme3" par ligne.</p>
                 </div>
-                <div class="help-item">
-                    <strong>query_rewriter.py</strong>
-                    <p>Règles BUSINESS_RULES qui enrichissent les requêtes. Modifiable et rechargeable à chaud via le bouton « Recharger ».</p>
-                </div>
             </div>
         </div>
     </div>
@@ -2639,7 +2632,6 @@ async def config_page():
             { name: 'settings.yaml', label: '⚙️ settings.yaml', editable: true },
             { name: 'prompts.yaml', label: '💬 prompts.yaml', editable: true },
             { name: 'synonyms.txt', label: '📖 synonyms.txt', editable: true },
-            { name: 'query_rewriter.py', label: '🔄 query_rewriter.py', editable: true },
             { name: 'mail', label: '📧 Mail', editable: false, special: true }
         ];
 

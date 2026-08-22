@@ -104,42 +104,10 @@ class QueryRequest(BaseModel):
     top_k: int = Field(default=20, description="Nombre de sources")
     index_name: Optional[str] = Field(default=None, description="Nom de l'index à interroger (Qdrant collection)")
     custom_prompt: Optional[str] = Field(default=None, description="Prompt personnalisé optionnel")
-    enable_rewriting: bool = Field(default=True, description="Activer le query rewriting")
     deep_search: bool = Field(default=False, description="Recherche approfondie (double recherche avec/sans historique)")
     history: List[ChatMessage] = Field(default=[], description="Historique de conversation")
 
 
-class AgentRunRequest(BaseModel):
-    query: str = Field(..., description="Question utilisateur")
-    profile: Optional[str] = Field(
-        default=None,
-        description=(
-            "Nom du profil agentique à utiliser (ex: 'support_technique'). "
-            "Si omis, utilise le profil actif (variable d'environnement AGENT_PROFILE, "
-            "défaut 'generic')."
-        )
-    )
-    index_name: Optional[str] = Field(default=None, description="Nom de l'index à interroger")
-    history: List[ChatMessage] = Field(default=[], description="Historique de conversation")
-    deep_search: bool = Field(
-        default=False,
-        description=(
-            "Si True ET qu'un history non vide est fourni, lance deux passages "
-            "complets de la boucle agentique (sans puis avec historique) et "
-            "retient le meilleur, comme /api/query. Ignore si history est vide. "
-            "Deux fois plus couteux (2x max_steps) : jamais choisi dynamiquement "
-            "par le LLM planificateur, seulement par ce parametre explicite."
-        ),
-    )
-    custom_prompt: Optional[str] = Field(
-        default=None,
-        description=(
-            "Instruction ponctuelle optionnelle pour cette requete, comme "
-            "/api/query. Concatenee au system_prompt du profil pour cet "
-            "appel uniquement, le profil charge depuis config/agent_profiles/ "
-            "n'est jamais modifie."
-        ),
-    )
 
 
 # ============================================================================
@@ -152,9 +120,7 @@ _ANALYZER_TTL = int(os.environ.get("ANALYZER_CACHE_TTL", "300"))  # 5 min par d�
 _embedder = None
 _llm_generator = None
 _reranker = None
-_query_rewriter = None
 _config = None
-_orchestrators = {}        # Cache par index_name (AgentOrchestrator reutilise le meme LLM/ToolRegistry)
 
 # ============================================================================
 # Index unique par instance (règle: 1 instance = 1 métier = 1 index)
@@ -325,22 +291,6 @@ def _get_llm_generator():
     return _llm_generator
 
 
-def _get_query_rewriter():
-    """Charge le query rewriter une seule fois"""
-    global _query_rewriter
-    if _query_rewriter is None:
-        from src.retrieval.query_rewriter import QueryRewriter
-        config = _get_config()
-        
-        # Option: activer le LLM fallback si configuré
-        enable_llm = config.get("retrieval", {}).get("query_rewrite_llm_fallback", False)
-        
-        _query_rewriter = QueryRewriter(
-            llm_client=_get_llm_generator() if enable_llm else None,
-            enable_llm_fallback=enable_llm
-        )
-        logger.info(f"QueryRewriter initialisé (LLM fallback: {enable_llm})")
-    return _query_rewriter
 
 
 def get_analyzer(index_name: str = None):
@@ -451,20 +401,6 @@ def _init_query_history_db():
             timestamp TEXT, index_name TEXT, question TEXT,
             faithfulness REAL, answer_relevancy REAL, context_recall REAL
         )""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS agent_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            profile_name TEXT,
-            index_name TEXT,
-            question TEXT,
-            answer TEXT,
-            sources TEXT,
-            trace TEXT,
-            steps_used INTEGER,
-            stopped_reason TEXT,
-            escalated INTEGER DEFAULT 0,
-            processing_time_ms INTEGER
-        )""")
 
 
 try:
@@ -493,34 +429,6 @@ def _log_query(question: str, answer: str, sources: list, index_name: str,
         logger.warning(f"Failed to log query for RAGAS: {e}")
 
 
-def _log_agent_run(profile_name: str, index_name: str, question: str, result: dict,
-                    processing_time_ms: int = 0):
-    """Enregistre une execution agentique complete (trace, escalade, etc.)
-    pour alimenter l'onglet Agents de l'UI Admin (visualiseur de trace,
-    compteur d'escalades)."""
-    try:
-        with sqlite3.connect(_QUERY_HISTORY_DB) as conn:
-            conn.execute(
-                """INSERT INTO agent_runs
-                (timestamp, profile_name, index_name, question, answer, sources,
-                 trace, steps_used, stopped_reason, escalated, processing_time_ms)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    datetime.now().isoformat(),
-                    profile_name,
-                    index_name,
-                    question,
-                    result.get("response", ""),
-                    json.dumps(result.get("sources", []), ensure_ascii=False),
-                    json.dumps(result.get("trace", []), ensure_ascii=False),
-                    result.get("steps_used"),
-                    result.get("stopped_reason"),
-                    1 if result.get("escalated") else 0,
-                    processing_time_ms,
-                )
-            )
-    except Exception as e:
-        logger.warning(f"Failed to log agent run: {e}")
 
 
 # ============================================================================
@@ -571,10 +479,10 @@ async def root():
 async def reload_config():
     """
     Recharge la configuration à chaud sans redémarrer le container.
-    Réinitialise les singletons : config, LLM, query rewriter, analyzers.
+    Réinitialise les singletons : config, LLM et analyzers.
     Les modèles GPU (embedder, reranker) ne sont PAS rechargés (trop coûteux).
     """
-    global _config, _llm_generator, _query_rewriter, _analyzers, _orchestrators
+    global _config, _llm_generator, _analyzers
     
     try:
         # 1. Reset settings.yaml cache
@@ -598,41 +506,21 @@ async def reload_config():
         _llm_generator = None
         logger.info("✅ LLM generator réinitialisé")
         
-        # 4. Reset query rewriter (reload du module Python depuis le disque + reset singleton)
-        _query_rewriter = None
-        import importlib
-        try:
-            from src.retrieval import query_rewriter as qr_module
-            importlib.reload(qr_module)
-            qr_module._rewriter_instance = None
-        except ImportError:
-            try:
-                from retrieval import query_rewriter as qr_module
-                importlib.reload(qr_module)
-                qr_module._rewriter_instance = None
-            except ImportError:
-                pass
-        logger.info("✅ Query rewriter rechargé depuis le disque")
-        
-        # 5. Mettre à jour le reranker top_n SANS recharger le modèle GPU
+        # 4. Mettre à jour le reranker top_n SANS recharger le modèle GPU
         if _reranker is not None:
             new_top_n = new_config.get("retrieval", {}).get("rerank_top_n", 10)
             _reranker.top_n = new_top_n
             logger.info(f"✅ Reranker top_n mis à jour: {new_top_n}")
         
-        # 6. Vider le cache des analyzers (seront recréés avec la nouvelle config)
+        # 5. Vider le cache des analyzers (seront recréés avec la nouvelle config)
         _analyzers.clear()
         logger.info("✅ Cache analyzers vidé")
-
-        # 6bis. Vider le cache des orchestrateurs agentiques (même raison)
-        _orchestrators.clear()
-        logger.info("✅ Cache orchestrateurs agentiques vidé")
         
         logger.info("🔄 Configuration rechargée avec succès !")
         return {
             "status": "ok",
             "message": "Configuration rechargée avec succès",
-            "reloaded": ["settings.yaml", "prompts.yaml", "llm_generator", "query_rewriter", "analyzers"],
+            "reloaded": ["settings.yaml", "prompts.yaml", "llm_generator", "analyzers"],
             "kept": ["embedder (GPU)", "reranker model (GPU)"]
         }
         
@@ -808,182 +696,8 @@ async def analyze(request: AnalyzeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def get_orchestrator(index_name: str = None):
-    """
-    Retourne un AgentOrchestrator pret a l'emploi pour l'index donne, en
-    reutilisant le meme HybridSearch/LLMGenerator/Reranker que le
-    DocumentAnalyzer (via get_analyzer, deja mis en cache avec son propre
-    TTL). Le reranker est ainsi applique de la meme facon cote agent que
-    cote pipeline /api/query.
-
-    L'orchestrateur est reconstruit si l'analyzer sous-jacent a ete
-    reconstruit entre-temps (expiration du TTL ou reload-config), pour ne
-    jamais garder de reference perimee vers un ancien HybridSearch/LLM.
-    """
-    resolved_index = _resolve_index_name(index_name)
-
-    analyzer = get_analyzer(index_name=resolved_index)
-
-    cached = _orchestrators.get(resolved_index)
-    if cached is not None and cached["analyzer"] is analyzer:
-        return cached["orchestrator"]
-
-    from src.agent.tools import ToolRegistry
-    from src.agent.orchestrator import (
-        AgentOrchestrator,
-        configurer_pages_dans_observations,
-    )
-
-    # Affichage de page_start / page_end dans les metadonnees observees
-    # par le planificateur. Desactive par defaut : l'ajouter change ce que
-    # le modele lit a chaque etape et n'est donc pas neutre pour une
-    # campagne comparative. La variable d'environnement
-    # AGENT_OBSERVATION_PAGES a priorite sur settings.yaml (agent.observation_pages),
-    # meme convention que AGENT_USE_RERANKER.
-    _agent_cfg = _get_config().get("agent", {}) or {}
-    _observation_pages = _env_flag(
-        "AGENT_OBSERVATION_PAGES",
-        default=bool(_agent_cfg.get("observation_pages", False)),
-    )
-    configurer_pages_dans_observations(_observation_pages)
-
-    # Reranking de l'agent : actif par defaut, desactivable pour une mesure
-    # A/B (recall@k avec et sans reranking sur le meme index). La variable
-    # d'environnement AGENT_USE_RERANKER a priorite sur settings.yaml pour
-    # permettre de lancer une campagne de mesure sans editer la config de
-    # l'instance. Le vivier soumis au cross-encoder reprend fusion_top_k
-    # (meme valeur que le pipeline /api/query via DocumentAnalyzer).
-    _retrieval_cfg = _get_config().get("retrieval", {}) or {}
-    _use_reranker = _env_flag(
-        "AGENT_USE_RERANKER",
-        default=bool(_retrieval_cfg.get("agent_use_reranker", True)),
-    )
-    tool_registry = ToolRegistry(
-        hybrid_search=analyzer.hybrid_search,
-        llm_generator=analyzer.llm_generator,
-        reranker=analyzer.reranker,
-        use_reranker=_use_reranker,
-        rerank_candidates=int(_retrieval_cfg.get("fusion_top_k", 30)),
-    )
-    # Pas de QueryRewriter dans la boucle agentique. Retire sur mesure :
-    # huit campagnes du jeu MRAe lancees dos a dos, quatre avec et quatre
-    # sans, ordre alterne equilibre. Aucun verdict change, ni dans un sens
-    # ni dans l'autre, y compris sur les trois seuls cas ou le rewriter se
-    # declenche. Cout mesure sur ces trois cas : 50 a 100 pour cent de
-    # requetes supplementaires, le rewriter remplacant la requete distillee
-    # par le planificateur par la question recopiee mot pour mot.
-    # Le planificateur formule deja ses propres requetes et sait les
-    # reformuler entre deux etapes. Le module reste charge et utilise par le
-    # pipeline procedural /api/query, qui n'est pas touche ici.
-    orchestrator = AgentOrchestrator(
-        tool_registry=tool_registry,
-        llm_generator=analyzer.llm_generator,
-    )
-    _orchestrators[resolved_index] = {"analyzer": analyzer, "orchestrator": orchestrator}
-    return orchestrator
 
 
-@app.post("/api/agent/run")
-async def agent_run(request: AgentRunRequest):
-    """
-    Point d'entree du mode agentique (boucle bornee plan/act/observe).
-
-    Mode additionnel a /api/analyze : ne remplace pas le pipeline
-    procedural existant (DocumentAnalyzer._analyze_chat et consorts).
-    A utiliser pour les instances/questions ou un enchainement de plusieurs
-    recherches, une verification croisee ou une escalade humaine
-    conditionnelle sont necessaires (voir profils dans config/agent_profiles/).
-
-    Args:
-        request.profile: nom du profil agentique (ex: 'support_technique').
-            Si omis, utilise le profil actif (AGENT_PROFILE, defaut 'generic').
-        request.index_name: index a interroger (sinon resolu comme pour /api/analyze).
-        request.history: historique de conversation, transmis a l'orchestrateur.
-        request.deep_search: si True et history non vide, double passage
-            (frais + contextuel) puis selection du meilleur, comme /api/query.
-    """
-    try:
-        from src.agent.agent_profiles import load_profile
-
-        _t0 = time.time()
-        resolved_index = _resolve_index_name(request.index_name)
-        profile = load_profile(request.profile) if request.profile else load_profile()
-        orchestrator = get_orchestrator(index_name=resolved_index)
-
-        history = [msg.dict() for msg in request.history] if request.history else None
-
-        result = orchestrator.run(
-            query=request.query,
-            profile=profile,
-            history=history,
-            deep_search=request.deep_search,
-            custom_prompt=request.custom_prompt,
-        )
-
-        result["index_name"] = resolved_index
-        result["profile_name"] = profile.get("name")
-        result["mode"] = result.get("result_type", "agentic")
-        _elapsed_ms = int((time.time() - _t0) * 1000)
-        result["processing_time_ms"] = _elapsed_ms
-
-        # Passages formates pour affichage (sidebar chat_ui.py), meme
-        # format que /api/query : texte tronque a 1000 caracteres, score
-        # arrondi, page/section si presents dans les metadonnees.
-        raw_results = result.pop("raw_search_results", [])
-        passages = []
-        for chunk in raw_results[:30]:
-            p = {
-                "text": (chunk.get("text") or chunk.get("content") or "")[:1000],
-                "file_name": chunk.get("file_name", ""),
-                "score": round(chunk.get("rrf_score", chunk.get("score", 0)) or 0, 4),
-            }
-            meta = chunk.get("metadata", {}) or {}
-            _reporter_pages(p, meta)
-            if meta.get("section"):
-                p["section"] = meta["section"]
-            passages.append(p)
-        result["passages"] = passages
-
-        # query_rewriting : meme forme que /api/query (le frontend lit ce
-        # nom de champ, pas query_rewritten expose par l'orchestrateur).
-        # La valeur reecrite elle-meme n'est exposee que dans trace[0]
-        # (entree "query_rewriting" ajoutee en etape pre-boucle, cf PR A) :
-        # l'orchestrateur n'expose que le booleen query_rewritten au niveau
-        # racine du resultat.
-        if result.get("query_rewritten"):
-            rewritten_value = request.query
-            for step in result.get("trace", []):
-                if step.get("tool") == "query_rewriting":
-                    variants = step.get("result", {}).get("rewritten_queries") or []
-                    if variants:
-                        rewritten_value = variants[0]
-                    break
-            result["query_rewriting"] = {
-                "original": request.query,
-                "rewritten": rewritten_value,
-                "type": result.get("query_type", "general"),
-            }
-
-        _log_agent_run(
-            profile_name=profile.get("name"),
-            index_name=resolved_index,
-            question=request.query,
-            result=result,
-            processing_time_ms=_elapsed_ms,
-        )
-
-        _log_query(
-            question=request.query,
-            answer=result.get("response", ""),
-            sources=result.get("sources", []),
-            index_name=resolved_index,
-        )
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Agent run error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/summarize-file")
@@ -1055,309 +769,22 @@ async def classify_query(query: str):
 # Deep Search - Comparaison des résultats
 # ============================================================================
 
-def _compare_deep_search_results(result_fresh: dict, result_context: dict, query: str) -> tuple:
-    """
-    Compare les résultats de la double recherche et retourne le meilleur.
-    
-    Stratégie de sélection :
-    1. Si l'un dit "pas d'info" et l'autre a une réponse → prendre celui avec réponse
-    2. Si les deux ont une réponse → prendre celui avec meilleur score de confiance
-    3. Si les deux disent "pas d'info" → prendre le résultat frais
-    
-    Args:
-        result_fresh: Résultat de la recherche sans historique
-        result_context: Résultat de la recherche avec historique
-        query: Question originale
-        
-    Returns:
-        Tuple (meilleur_resultat, choix_effectue)
-    """
-    # Patterns indiquant "pas d'information trouvée"
-    no_info_patterns = [
-        "pas d'information",
-        "pas trouvé",
-        "n'ai pas trouvé",
-        "aucune information",
-        "pas de données",
-        "information non trouvée",
-        "je ne dispose pas",
-        "pas disponible dans",
-        "documents ne contiennent pas"
-    ]
-    
-    def has_no_info(response: str) -> bool:
-        """Vérifie si la réponse indique qu'aucune info n'a été trouvée"""
-        response_lower = response.lower()
-        return any(pattern in response_lower for pattern in no_info_patterns)
-    
-    def get_confidence(result: dict) -> float:
-        """Extrait le score de confiance du résultat"""
-        return result.get("metadata", {}).get("confidence", 0.5)
-    
-    def get_sources_count(result: dict) -> int:
-        """Compte le nombre de sources pertinentes"""
-        return len(result.get("sources", []))
-    
-    response_fresh = result_fresh.get("response", "")
-    response_context = result_context.get("response", "")
-    
-    fresh_no_info = has_no_info(response_fresh)
-    context_no_info = has_no_info(response_context)
-    
-    # Cas 1 : Fresh a trouvé, Context n'a pas trouvé
-    if not fresh_no_info and context_no_info:
-        logger.info("🔍 Deep Search: Résultat FRAIS choisi (context n'a pas trouvé)")
-        return result_fresh, "fresh_found"
-    
-    # Cas 2 : Context a trouvé, Fresh n'a pas trouvé
-    if fresh_no_info and not context_no_info:
-        logger.info("🔍 Deep Search: Résultat CONTEXTUEL choisi (fresh n'a pas trouvé)")
-        return result_context, "context_found"
-    
-    # Cas 3 : Les deux ont trouvé → comparer confiance et sources
-    if not fresh_no_info and not context_no_info:
-        fresh_confidence = get_confidence(result_fresh)
-        context_confidence = get_confidence(result_context)
-        fresh_sources = get_sources_count(result_fresh)
-        context_sources = get_sources_count(result_context)
-        
-        # Score combiné : confiance + bonus pour sources
-        fresh_score = fresh_confidence + (fresh_sources * 0.01)
-        context_score = context_confidence + (context_sources * 0.01)
-        
-        if fresh_score >= context_score:
-            logger.info(f"🔍 Deep Search: Résultat FRAIS choisi (score {fresh_score:.2f} >= {context_score:.2f})")
-            return result_fresh, "fresh_better_score"
-        else:
-            logger.info(f"🔍 Deep Search: Résultat CONTEXTUEL choisi (score {context_score:.2f} > {fresh_score:.2f})")
-            return result_context, "context_better_score"
-    
-    # Cas 4 : Aucun n'a trouvé → prendre le frais (plus neutre)
-    logger.info("🔍 Deep Search: Résultat FRAIS choisi (aucun n'a trouvé)")
-    return result_fresh, "both_no_info"
 
 
-@app.post("/api/query")
-async def simple_query(request: QueryRequest):
-    """
-    Point d'entrée simplifié pour requête RAG standard.
-    Équivalent à /api/analyze avec mode=chat.
-    
-    Inclut le Query Rewriting automatique pour améliorer les résultats.
-    
-    Args:
-        request.query: Question utilisateur
-        request.top_k: Nombre de sources à retourner
-        request.index_name: Nom de l'index à interroger (optionnel)
-        request.custom_prompt: Prompt personnalisé optionnel
-        request.enable_rewriting: Activer/désactiver le query rewriting
-    """
-    try:
-        # Convertir l'historique en format dict pour le LLM
-        history_dicts = None
-        if request.history and len(request.history) > 0:
-            history_dicts = [{"role": msg.role, "content": msg.content} for msg in request.history]
-            logger.info(f"Using conversation history: {len(history_dicts)} messages")
-        
-        # =====================================================================
-        # Contextualisation des questions de suivi
-        # Si la question semble être une question de suivi (courte, pronoms...),
-        # on l'enrichit avec le contexte de la dernière question utilisateur
-        # =====================================================================
-        contextualized_query = request.query
-        was_contextualized = False
-        
-        if history_dicts and len(history_dicts) >= 2:
-            query_lower = request.query.lower().strip()
-            
-            # Détection de question de suivi (patterns typiques)
-            followup_indicators = [
-                # Pronoms référentiels
-                query_lower.startswith(("ça", "ca", "c'", "il ", "elle ", "ils ", "elles ", "le ", "la ", "les ", "lui ")),
-                # Questions courtes sans sujet clair
-                len(request.query.split()) <= 8 and any(w in query_lower for w in ["aussi", "donc", "alors", "sinon", "autre", "plus", "moins", "combien", "quoi", "lequel", "lesquels", "laquelle", "lesquelles"]),
-                # Questions commençant par des mots de liaison
-                query_lower.startswith(("et ", "mais ", "ou ", "donc ", "car ", "parce", "sinon ", "autrement ")),
-                # Questions avec "me" référant à une réponse précédente
-                any(p in query_lower for p in ["donne moi", "dis moi", "montre moi", "explique moi", "liste", "détaille", "précise", "peux-tu", "peux tu", "tu peux"]),
-            ]
-            
-            if any(followup_indicators):
-                # Trouver la dernière question utilisateur dans l'historique
-                last_user_query = None
-                for msg in reversed(history_dicts):
-                    if msg.get("role") == "user":
-                        last_user_query = msg.get("content", "")
-                        break
-                
-                if last_user_query and len(last_user_query) > 10:
-                    # Enrichir la requête avec le contexte
-                    contextualized_query = f"{request.query} (contexte: {last_user_query})"
-                    was_contextualized = True
-                    logger.info(f"Query contextualized: '{request.query}' → '{contextualized_query}'")
-        
-        # Query Rewriting - reformuler la requête si activé
-        rewritten_query = contextualized_query
-        was_rewritten = False
-        query_type = None
-        
-        # DEBUG: Log AVANT le rewriter
-        logger.info(f"DEBUG API - BEFORE rewriter: contextualized_query='{contextualized_query}' (len={len(contextualized_query)})")
-        
-        if request.enable_rewriting:
-            query_rewriter = _get_query_rewriter()
-            # rewrite() retourne: (List[str], str, bool) = (requêtes, query_type, was_modified)
-            rewritten_queries, query_type, was_rewritten = query_rewriter.rewrite(contextualized_query)
-            
-            # DEBUG: Log APRÈS le rewriter
-            logger.info(f"DEBUG API - AFTER rewriter: rewritten_queries={rewritten_queries}, type={query_type}, was_rewritten={was_rewritten}")
-            
-            # Requête principale pour le prompt LLM (première de la liste)
-            rewritten_query = rewritten_queries[0] if rewritten_queries else contextualized_query
-            
-            if was_rewritten:
-                logger.info(f"Query rewritten: '{contextualized_query}' → '{rewritten_query}' (type: {query_type}, {len(rewritten_queries)} variantes)")
-        
-        # Utiliser l'index spécifié ou celui par défaut
-        analyzer = get_analyzer(index_name=_resolve_index_name(request.index_name))
-        
-        # DEBUG: Log de la query avant d'appeler l'analyzer
-        logger.info(f"DEBUG API - Query to analyzer: '{rewritten_query}' (len={len(rewritten_query)})")
-        
-        # Préparer les options avec le prompt personnalisé si fourni
-        options = {"max_items": request.top_k}
-        if request.custom_prompt:
-            options["custom_prompt"] = request.custom_prompt
-            logger.info(f"Using custom prompt: {request.custom_prompt[:100]}...")
-        
-        # Préparer les requêtes multi-query pour la recherche
-        # (toutes les variantes générées par le rewriter)
-        multi_search_queries = rewritten_queries if (was_rewritten and len(rewritten_queries) > 1) else None
-        
-        # =====================================================================
-        # DEEP SEARCH : Double recherche avec/sans historique
-        # =====================================================================
-        if request.deep_search and history_dicts and len(history_dicts) > 0:
-            logger.info("🔍 DEEP SEARCH activé - Lancement double recherche")
-            
-            # Recherche 1 : SANS historique (recherche fraîche)
-            result_fresh = analyzer.analyze(
-                query=rewritten_query,
-                mode="chat",
-                options=options,
-                history=None,  # Pas d'historique
-                search_queries=multi_search_queries
-            )
-            
-            # Recherche 2 : AVEC historique (recherche contextuelle)
-            result_context = analyzer.analyze(
-                query=rewritten_query,
-                mode="chat",
-                options=options,
-                history=history_dicts,
-                search_queries=multi_search_queries
-            )
-            
-            # Comparer les résultats
-            result, search_choice = _compare_deep_search_results(
-                result_fresh, 
-                result_context,
-                rewritten_query
-            )
-            
-            logger.info(f"🔍 DEEP SEARCH résultat choisi: {search_choice}")
-            
-            # Marquer qu'on a utilisé deep_search
-            deep_search_info = {
-                "enabled": True,
-                "choice": search_choice,
-                "fresh_confidence": result_fresh.get("metadata", {}).get("confidence", 0),
-                "context_confidence": result_context.get("metadata", {}).get("confidence", 0)
-            }
-        else:
-            # Recherche normale (simple ou multi-query)
-            result = analyzer.analyze(
-                query=rewritten_query,
-                mode="chat",
-                options=options,
-                history=history_dicts,
-                search_queries=multi_search_queries
-            )
-            deep_search_info = None
-        
-        search_results_raw = result.get("search_results", [])
-        passages = []
-        for chunk in search_results_raw[:30]:
-            p = {
-                "text": (chunk.get("text") or chunk.get("content") or "")[:1000],
-                "file_name": chunk.get("file_name", ""),
-                "score": round(chunk.get("rrf_score", chunk.get("score", 0)), 4),
-            }
-            meta = chunk.get("metadata", {}) or {}
-            _reporter_pages(p, meta)
-            if meta.get("section"):
-                p["section"] = meta["section"]
-            passages.append(p)
-
-        response_data = {
-            "response": result.get("response", ""),
-            "sources": result.get("sources", []),
-            "passages": passages,
-            "mode": "chat",
-            "index_name": _resolve_index_name(request.index_name),
-            "processing_time_ms": result.get("metadata", {}).get("processing_time_ms", 0)
-        }
-        
-        # Ajouter info sur le rewriting si appliqué
-        if was_rewritten:
-            response_data["query_rewriting"] = {
-                "original": request.query,
-                "rewritten": rewritten_query,
-                "type": query_type
-            }
-        
-        # Ajouter info sur la contextualisation si appliquée
-        if was_contextualized:
-            response_data["query_contextualized"] = {
-                "original": request.query,
-                "contextualized": contextualized_query
-            }
-        
-        # Ajouter info sur deep_search si utilisé
-        if deep_search_info:
-            response_data["deep_search"] = deep_search_info
-        
-        # Log pour RAGAS (async-safe, fire and forget)
-        _log_query(
-            question=request.query,
-            answer=response_data.get("response", ""),
-            sources=response_data.get("sources", []),
-            index_name=response_data.get("index_name", ""),
-            processing_time_ms=response_data.get("processing_time_ms", 0),
-            search_results=result.get("search_results", []),
-        )
-        
-        return response_data
-        
-    except Exception as e:
-        logger.error(f"Query error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/query2")
 async def iterative_query(request: QueryRequest):
     """
-    Pipeline iteratif v2 - ENDPOINT EXPERIMENTAL (voir DESIGN_agent_v2).
+    Pipeline iteratif query2.
 
-    Meme contrat que /api/query (QueryRequest) : query, index_name, top_k,
-    custom_prompt, history. enable_rewriting et deep_search sont ignores.
+    Le contrat accepte query, index_name, top_k, custom_prompt et history.
+    deep_search est ignore.
 
-    Difference avec /api/query : apres la recherche classique, une analyse
-    de couverture (1 appel LLM sur les passages complets) determine si les
-    passages suffisent. Sinon, une seconde recherche ciblee (requetes
-    proposees par l'analyse, vocabulaire metier) complete les passages
-    avant la generation finale. Si la couverture est bonne, la reponse est
-    STRICTEMENT identique a /api/query (meme calcul).
+    Apres la recherche classique, une analyse de couverture (1 appel LLM
+    sur les passages complets) determine si les passages suffisent. Sinon,
+    une seconde recherche ciblee (requetes proposees par l'analyse,
+    vocabulaire metier) complete les passages avant la generation finale.
 
     La reponse inclut une cle "iterative" tracant la couverture.
     """
@@ -1438,166 +865,18 @@ async def get_query_history(limit: int = 50):
 # Agent Profiles & Runs (pour l'onglet Agents de l'UI Admin)
 # ============================================================================
 
-@app.get("/api/agent/profiles")
-async def list_agent_profiles():
-    """Liste les profils agentiques disponibles (fichiers YAML dans
-    config/agent_profiles/), avec le profil actuellement actif signale."""
-    try:
-        from src.agent.agent_profiles import list_available_profiles
-        import os as _os
-
-        names = list_available_profiles()
-        active = _os.environ.get("AGENT_PROFILE", "generic")
-        return {"profiles": names, "active": active}
-    except Exception as e:
-        logger.error(f"list_agent_profiles error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
-def _agent_profile_path(profile_name: str) -> str:
-    """Resout le chemin du fichier YAML d'un profil agentique, meme logique
-    que agent_profiles._candidate_paths mais expose ici pour lecture/ecriture
-    depuis l'UI Admin."""
-    safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "", profile_name)
-    if not safe_name:
-        raise HTTPException(status_code=400, detail="Nom de profil invalide")
-    candidates = [
-        os.path.join("config", "agent_profiles", f"{safe_name}.yaml"),
-        os.path.join("/app", "config", "agent_profiles", f"{safe_name}.yaml"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return candidates[0]
 
 
-@app.get("/api/agent/profiles/{profile_name}")
-async def get_agent_profile_yaml(profile_name: str):
-    """Retourne le contenu brut du YAML d'un profil, pour l'editeur inline."""
-    path = _agent_profile_path(profile_name)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail=f"Profil '{profile_name}' introuvable")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        return {"profile_name": profile_name, "path": path, "content": content}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
-class AgentProfileUpdate(BaseModel):
-    content: str = Field(..., description="Contenu YAML complet du profil")
 
 
-@app.post("/api/agent/profiles/{profile_name}")
-async def save_agent_profile_yaml(profile_name: str, request: AgentProfileUpdate):
-    """Enregistre le YAML edite d'un profil, apres validation de sa syntaxe
-    et de la presence des cles requises. N'ecrit rien si la validation echoue."""
-    from src.agent.agent_profiles import REQUIRED_KEYS
-
-    try:
-        parsed = yaml.safe_load(request.content) or {}
-    except yaml.YAMLError as e:
-        raise HTTPException(status_code=400, detail=f"YAML invalide: {e}")
-
-    if not isinstance(parsed, dict):
-        raise HTTPException(status_code=400, detail="Le YAML doit decrire un objet (mapping)")
-
-    missing = [k for k in REQUIRED_KEYS if k not in parsed]
-    if missing:
-        raise HTTPException(status_code=400, detail=f"Cles obligatoires manquantes: {missing}")
-
-    path = _agent_profile_path(profile_name)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(request.content)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    from src.agent.agent_profiles import reload_active_profile
-    try:
-        if os.environ.get("AGENT_PROFILE", "generic") == profile_name:
-            reload_active_profile(profile_name)
-    except Exception as e:
-        logger.warning(f"Rechargement du profil actif apres sauvegarde impossible: {e}")
-
-    return {"status": "ok", "profile_name": profile_name, "path": path}
 
 
-@app.get("/api/agent/runs")
-async def get_agent_runs(limit: int = 50, profile: Optional[str] = None):
-    """Historique des executions agentiques (pour le visualiseur de trace).
-    Filtrable par profil."""
-    try:
-        with sqlite3.connect(_QUERY_HISTORY_DB) as conn:
-            conn.row_factory = sqlite3.Row
-            if profile:
-                rows = conn.execute(
-                    "SELECT id, timestamp, profile_name, index_name, question, answer, sources, "
-                    "trace, steps_used, stopped_reason, escalated, processing_time_ms "
-                    "FROM agent_runs WHERE profile_name = ? ORDER BY id DESC LIMIT ?",
-                    (profile, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT id, timestamp, profile_name, index_name, question, answer, sources, "
-                    "trace, steps_used, stopped_reason, escalated, processing_time_ms "
-                    "FROM agent_runs ORDER BY id DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
-
-        runs = []
-        for r in rows:
-            run = dict(r)
-            for field in ("sources", "trace"):
-                try:
-                    run[field] = json.loads(run[field]) if run[field] else []
-                except (TypeError, ValueError):
-                    run[field] = []
-            run["escalated"] = bool(run["escalated"])
-            runs.append(run)
-        return {"runs": runs}
-    except Exception as e:
-        return {"runs": [], "error": str(e)}
 
 
-@app.get("/api/agent/stats")
-async def get_agent_stats(profile: Optional[str] = None):
-    """Statistiques agregees pour le tableau de bord de l'onglet Agents :
-    nombre total d'executions, nombre et taux d'escalade, repartition par
-    stopped_reason."""
-    try:
-        with sqlite3.connect(_QUERY_HISTORY_DB) as conn:
-            conn.row_factory = sqlite3.Row
-            where = "WHERE profile_name = ?" if profile else ""
-            params = (profile,) if profile else ()
-
-            total = conn.execute(
-                f"SELECT COUNT(*) as n FROM agent_runs {where}", params
-            ).fetchone()["n"]
-            escalated = conn.execute(
-                f"SELECT COUNT(*) as n FROM agent_runs {where}{' AND' if where else 'WHERE'} escalated = 1",
-                params,
-            ).fetchone()["n"]
-            reasons = conn.execute(
-                f"SELECT stopped_reason, COUNT(*) as n FROM agent_runs {where} "
-                "GROUP BY stopped_reason", params,
-            ).fetchall()
-            avg_steps = conn.execute(
-                f"SELECT AVG(steps_used) as avg_steps FROM agent_runs {where}", params
-            ).fetchone()["avg_steps"]
-
-        return {
-            "total_runs": total,
-            "escalated_count": escalated,
-            "escalation_rate": round(escalated / total, 3) if total else 0,
-            "stopped_reasons": {row["stopped_reason"] or "inconnu": row["n"] for row in reasons},
-            "avg_steps_used": round(avg_steps, 2) if avg_steps is not None else None,
-        }
-    except Exception as e:
-        return {"total_runs": 0, "escalated_count": 0, "escalation_rate": 0,
-                "stopped_reasons": {}, "avg_steps_used": None, "error": str(e)}
 
 
 @app.get("/api/cache/stats")
@@ -2006,5 +1285,3 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("AGENT_PORT", 8500))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
-

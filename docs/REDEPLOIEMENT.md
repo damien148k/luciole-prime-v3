@@ -52,14 +52,12 @@ Dans le dossier de l'instance creee :
 
 1. `config/settings.yaml` : partir du `settings.yaml` du paquet, pas de
    `settings.yaml.example`. Retablir les valeurs masquees.
-2. `config/agent_profiles/<profil>.yaml` : le `profil_*.yaml` du paquet.
-3. `.env` : reprendre `INSTANCE_NAME`, `AGENT_PROFILE`, et poser
-   `CHAT_ROUTE` a la meme valeur que la reference.
-4. `data/inbox` : le corpus, verifie contre `corpus.txt` du paquet.
-5. `models/` : retelecharger les modeles listes dans `modeles.json`, en
+2. `.env` : reprendre `INSTANCE_NAME`.
+3. `data/inbox` : le corpus, verifie contre `corpus.txt` du paquet.
+4. `models/` : retelecharger les modeles listes dans `modeles.json`, en
    verifiant l'empreinte et les parametres du Modelfile, `num_ctx` en
    particulier.
-6. `feedbacks/` : facultatif, seulement pour conserver l'historique.
+5. `feedbacks/` : facultatif, seulement pour conserver l'historique.
 
 ## Etape 4, verifier que le moteur est bien le meme
 
@@ -114,20 +112,9 @@ comparaison entre deux machines concluante.
 
 ## Etape 6, la chaine a emprunter
 
-La chaine retenue, celle qui a produit les chiffres ci-dessus, est le
-pipeline procedural en une passe, avec la consigne de generation de
-`config/prompts/`, sans boucle agentique et sans reecriture de requete.
-Pour que l'interface de chat l'emprunte, poser dans le `.env` :
-
-```
-CHAT_ROUTE=classique
-```
-
-La variable doit aussi figurer dans le bloc `environment` du service
-`chat`, ce que les composes du depot font depuis cette version. Une
-instance plus ancienne, dont le `docker-compose.yml` a ete genere avant,
-ne transmettra rien au conteneur tant que la ligne
-`- CHAT_ROUTE=${CHAT_ROUTE:-agent}` n'y est pas ajoutee.
+La chaine retenue est le pipeline iteratif query2, avec la consigne de
+generation de `config/prompts/`. Le chat et le mail l'utilisent
+directement, sans variable de selection de route.
 
 ## Ce qui n'est pas garanti par cette procedure
 

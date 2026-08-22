@@ -38,8 +38,7 @@ CE QUE CE SCRIPT NE PEUT PAS FAIRE, lu dans le code avant de l'ecrire
 
   - la consigne est importee de campagne_consigne.py, elle n'est pas
     recopiee : un seul texte de reference, aucune divergence possible,
-  - la route est /api/query, qui ne transmet pas detail_level, donc le
-    vivier reste plafonne a 100 passages (mode standard),
+  - la route est /api/query2, dont le pipeline pilote sa recherche,
   - le journal Ollama du 6 aout donne n_ctx_slot = 8192 et une invite
     mesuree a 6051 jetons, truncated = 0. La fenetre n'est pas depassee
     sur ce bras, mais la marge est de l'ordre de deux mille jetons,
@@ -107,7 +106,7 @@ def verdict(texte):
 def poster(charge, timeout=900):
     donnees = json.dumps(charge, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
-        API + "/api/query", data=donnees,
+        API + "/api/query2", data=donnees,
         headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
@@ -137,7 +136,6 @@ def un_passage(numero, cas, sortie):
         charge = {
             "query": c.get("remarque_mrae") or "",
             "top_k": TOP_K,
-            "enable_rewriting": False,
             "deep_search": False,
             "custom_prompt": CONSIGNE,
         }
@@ -184,13 +182,13 @@ def main():
         f"CAMPAGNE {LABEL} : plancher de bruit du bras consigne seule",
         "=" * 78,
         f"{PASSAGES} passages identiques, {len(cas)} remarques chacun.",
-        f"route /api/query   top_k={TOP_K}   enable_rewriting=false",
+        f"route /api/query2   top_k={TOP_K}",
         "consigne importee de campagne_consigne.py, "
         f"{len(CONSIGNE)} caracteres.",
         "",
         "Etat de l'instance au moment de la mesure, verifie fichier par",
         "fichier : code de main 7dbdbac, germe transmis, temperature 0.0",
-        "et seed 42 dans settings.yaml, reecriveur hors de la boucle.",
+        "et seed 42 dans settings.yaml.",
         "",
         "Repere du 3 aout, avant ces correctifs, sur la route agentique :",
         "7 reponses identiques sur 20 entre deux passages.",

@@ -27,7 +27,6 @@ ne voulez rien changer, utilisez `docker-compose.legacy.yml`.
 | Backend LLM | Ollama uniquement | Ollama / TensorRT-LLM (contrat `LLM_URL` OpenAI-compatible ; autres backends OpenAI-compatibles utilisables sans gestion dynamique UI) |
 | Architecture ARM64 | ✗ | GX10 / GB10 (Blackwell sm_121) |
 | Multi-instances métier | ✗ | LLM partagé + N instances (réseau `luciole_shared`) |
-| Règles de query rewriting | 15 règles éolien codées en dur | `BUSINESS_RULES = []` par défaut + profils `config/profiles/` |
 | Serveur mail de test | `mail-server/` (Stalwart, non branché) | GreenMail (`greenmail/standalone:latest`) |
 | Lancement chat UI | `uvicorn src.api.chat_ui:app` | idem (`chat_ui` est une app FastAPI) |
 | Logo | `pics/luciole.png` (533 Ko) | `src/api/static/logo.png` (148 Ko) |
@@ -50,17 +49,6 @@ ne voulez rien changer, utilisez `docker-compose.legacy.yml`.
    docker compose -f docker-compose.legacy.yml up -d
    ```
 
-### Règles métier éolien
-
-Si votre instance v2 s'appuyait sur les 15 règles éolien / ICPE, elles ont été
-archivées dans `config/profiles/query_rewriter.eolien.py`. Pour les réactiver :
-
-```bash
-export BUSINESS_PROFILE=eolien
-```
-
-Voir `config/profiles/README.md` pour le mécanisme complet.
-
 ## 4. Passer à l'architecture ARM64 multi-instances (GX10 / GB10)
 
 Nouveau déploiement (pas une migration in-place) :
@@ -73,11 +61,11 @@ Nouveau déploiement (pas une migration in-place) :
    ```
 3. Démarrez une instance métier :
    ```bash
-   INSTANCE_NAME=eolien BUSINESS_PROFILE=eolien \
+   INSTANCE_NAME=eolien \
      docker compose -f docker-compose.instance.gx10.yml up -d
    ```
 4. Répétez l'étape 3 pour chaque métier (`horlogerie`, `crm`, `petrochimie`…),
-   chacun avec son `INSTANCE_NAME`, son bloc de ports et son `BUSINESS_PROFILE`.
+   chacun avec son `INSTANCE_NAME` et son bloc de ports.
 
 ## 5. Vérifications post-migration
 

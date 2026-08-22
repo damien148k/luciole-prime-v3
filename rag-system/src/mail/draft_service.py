@@ -30,7 +30,7 @@ class DraftService:
 
     Workflow :
       1. Construire la requête RAG depuis l'email et le contexte du thread
-      2. Appeler l'Agent API (POST /api/query)
+      2. Appeler l'Agent API (POST /api/query2)
       3. Vérifier la réponse (guardrails basiques)
       4. Insérer le brouillon en DB
       5. Mettre à jour le statut du message entrant
@@ -210,7 +210,7 @@ class DraftService:
     @staticmethod
     def _call_rag(query: str, index_name: str) -> dict:
         """
-        Appelle l'Agent API existant (POST /api/query).
+        Appelle l'Agent API existante (POST /api/query2).
 
         Réutilise toute la chaîne RAG : hybrid search + reranker + LLM.
         Retourne le dict JSON de la réponse.
@@ -220,12 +220,11 @@ class DraftService:
             "query": query,
             "index_name": index_name,
             "top_k": 20,           # aligné sur le défaut chat (ChatRequest.top_k=20)
-            "enable_rewriting": True,
         }
 
         try:
             with httpx.Client(timeout=600.0) as client:   # 10min — chargement modèle 14B inclus
-                resp = client.post(f"{AGENT_URL}/api/query", json=payload)
+                resp = client.post(f"{AGENT_URL}/api/query2", json=payload)
                 resp.raise_for_status()
                 return resp.json()
         except httpx.TimeoutException:

@@ -11,12 +11,10 @@ Implémente :
 """
 
 import logging
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 import numpy as np
 from datetime import datetime
-
-from src.retrieval.query_rewriter import get_query_rewriter, QueryRewriter
 
 logger = logging.getLogger(__name__)
 
@@ -61,21 +59,17 @@ class HybridQueryEngine:
     Moteur de recherche hybride combinant BM25, Dense Search et Reranking.
     
     Flux :
-    1. QueryRewriter : reformule et détecte le type de requête
-    2. Multi-query search : lance plusieurs requêtes pour dossiers
-    3. BM25 search : recherche textuelle
-    4. Dense search : recherche par similarité sémantique
-    5. RRF fusion : combine les résultats
-    6. Reranking : optimise le scoring final (optionnel)
-    7. Deduplication : supprime les doublons avec scoring fusionné
+    1. BM25 search : recherche textuelle
+    2. Dense search : recherche par similarité sémantique
+    3. RRF fusion : combine les résultats
+    4. Reranking : optimise le scoring final (optionnel)
+    5. Deduplication : supprime les doublons avec scoring fusionné
     """
     
     def __init__(self, 
                  bm25_engine=None,
                  dense_engine=None,
                  reranker=None,
-                 query_rewriter: Optional[QueryRewriter] = None,
-                 enable_multi_query: bool = True,
                  enable_reranking: bool = True):
         """
         Initialise le moteur hybride.
@@ -84,15 +78,11 @@ class HybridQueryEngine:
             bm25_engine: Instance du moteur BM25
             dense_engine: Instance du moteur Dense (KNN)
             reranker: Instance du reranker (optionnel)
-            query_rewriter: Instance du QueryRewriter (ou crée une nouvelle)
-            enable_multi_query: Active la multi-query pour dossiers
             enable_reranking: Active le reranking final
         """
         self.bm25_engine = bm25_engine
         self.dense_engine = dense_engine
         self.reranker = reranker
-        self.query_rewriter = query_rewriter or get_query_rewriter()
-        self.enable_multi_query = enable_multi_query
         self.enable_reranking = enable_reranking
         
         logger.info(
@@ -100,7 +90,6 @@ class HybridQueryEngine:
             f"BM25={bm25_engine is not None}, "
             f"Dense={dense_engine is not None}, "
             f"Reranker={reranker is not None}, "
-            f"MultiQuery={enable_multi_query}, "
             f"Reranking={enable_reranking}"
         )
     
@@ -113,7 +102,7 @@ class HybridQueryEngine:
                top_k: int = 10,
                min_score: float = 0.0) -> SearchResults:
         """
-        Lance une recherche hybride avec reformulation intelligente.
+        Lance une recherche hybride.
         
         Args:
             query: Requête utilisateur
@@ -125,34 +114,17 @@ class HybridQueryEngine:
         """
         start_time = datetime.now()
         
-        # 1. Reformuler la requête
-        rewritten_queries, query_type, was_modified = self.query_rewriter.rewrite(query)
+        logger.info(f"🔍 Recherche: '{query}'")
+
+        all_results = self._perform_single_query_search(query, top_k)
         
-        logger.info(
-            f"🔍 Recherche: '{query}' → Type: {query_type}, "
-            f"Variantes: {len(rewritten_queries)}, Modifié: {was_modified}"
-        )
-        
-        # 2. Effectuer la recherche (simple ou multi-query)
-        if self.enable_multi_query and len(rewritten_queries) > 1:
-            all_results = self._perform_multi_query_search(
-                rewritten_queries, 
-                query_type, 
-                top_k
-            )
-        else:
-            all_results = self._perform_single_query_search(
-                rewritten_queries[0], 
-                top_k
-            )
-        
-        # 3. Dédupliquer et fusionner
+        # 2. Dédupliquer et fusionner
         final_results = self._deduplicate_and_score_results(all_results)
         
-        # 4. Filtrer par score minimum
+        # 3. Filtrer par score minimum
         final_results = [r for r in final_results if r.score >= min_score]
         
-        # 5. Retourner les top_k
+        # 4. Retourner les top_k
         final_results = final_results[:top_k]
         
         elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
@@ -166,13 +138,13 @@ class HybridQueryEngine:
             results=final_results,
             total_count=len(final_results),
             search_time_ms=elapsed_ms,
-            queries=rewritten_queries,
-            query_type=query_type,
-            was_multi_query=len(rewritten_queries) > 1
+            queries=[query],
+            query_type="standard",
+            was_multi_query=False
         )
     
     # =========================================================================
-    # SINGLE vs MULTI QUERY
+    # RECHERCHE
     # =========================================================================
     
     def _perform_single_query_search(self, query: str, top_k: int) -> List[SearchResult]:
@@ -196,36 +168,6 @@ class HybridQueryEngine:
                 logger.debug(f"   Dense: {len(dense_results)} résultats")
             except Exception as e:
                 logger.warning(f"Erreur Dense: {e}")
-        
-        return all_results
-    
-    def _perform_multi_query_search(self, 
-                                   queries: List[str], 
-                                   query_type: str, 
-                                   top_k: int) -> List[SearchResult]:
-        """Effectue une recherche multi-requête pour dossiers."""
-        all_results = []
-        
-        logger.info(f"🔄 Multi-query search avec {len(queries)} variantes:")
-        
-        for i, variant_query in enumerate(queries, 1):
-            logger.debug(f"   Requête {i}/{len(queries)}: {variant_query}")
-            
-            # Adapter top_k pour avoir assez de résultats après fusion
-            adjusted_top_k = max(top_k, int(top_k * 1.5))
-            
-            variant_results = self._perform_single_query_search(
-                variant_query, 
-                adjusted_top_k
-            )
-            
-            logger.debug(
-                f"      → {len(variant_results)} résultats pour cette variante"
-            )
-            
-            all_results.extend(variant_results)
-        
-        logger.info(f"📊 Total avant déduplication: {len(all_results)} résultats")
         
         return all_results
     
@@ -386,21 +328,11 @@ class HybridQueryEngine:
         Returns:
             Dict: Informations de déboggage
         """
-        # Reformulation
-        rewritten, query_type, was_modified = self.query_rewriter.rewrite(query)
-        
         debug_info = {
             'original_query': query,
-            'query_type': query_type,
-            'was_modified': was_modified,
-            'rewritten_queries': rewritten,
-            'num_variants': len(rewritten),
-            'query_rewriter_info': {
-                'type_detection': query_type,
-                'multi_query': len(rewritten) > 1,
-            },
+            'query_type': 'standard',
+            'queries': [query],
             'search_config': {
-                'enable_multi_query': self.enable_multi_query,
                 'enable_reranking': self.enable_reranking,
                 'engines': {
                     'bm25': self.bm25_engine is not None,
@@ -411,10 +343,7 @@ class HybridQueryEngine:
         }
         
         logger.info(f"Debug Query: {query}")
-        logger.info(f"  Type: {query_type}")
-        logger.info(f"  Variantes: {len(rewritten)}")
-        for i, q in enumerate(rewritten, 1):
-            logger.info(f"    {i}. {q}")
+        logger.info("  Type: standard")
         
         return debug_info
     
@@ -426,11 +355,9 @@ class HybridQueryEngine:
             Dict: Statistiques
         """
         return {
-            'query_rewriter': self.query_rewriter is not None,
             'bm25_engine': self.bm25_engine is not None,
             'dense_engine': self.dense_engine is not None,
             'reranker': self.reranker is not None,
-            'enable_multi_query': self.enable_multi_query,
             'enable_reranking': self.enable_reranking,
         }
 
@@ -446,7 +373,6 @@ def get_hybrid_query_engine(
     bm25_engine=None,
     dense_engine=None,
     reranker=None,
-    enable_multi_query: bool = True,
     enable_reranking: bool = True
 ) -> HybridQueryEngine:
     """
@@ -456,7 +382,6 @@ def get_hybrid_query_engine(
         bm25_engine: Instance du moteur BM25
         dense_engine: Instance du moteur Dense
         reranker: Instance du reranker
-        enable_multi_query: Active la multi-query
         enable_reranking: Active le reranking
         
     Returns:
@@ -469,7 +394,6 @@ def get_hybrid_query_engine(
             bm25_engine=bm25_engine,
             dense_engine=dense_engine,
             reranker=reranker,
-            enable_multi_query=enable_multi_query,
             enable_reranking=enable_reranking
         )
     

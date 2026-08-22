@@ -21,9 +21,7 @@ CE QUE CE TEST MESURE EN PLUS, lu dans le code avant de l'ecrire :
 
 CE QUE CE TEST NE PEUT PAS FAIRE :
 
-  - enable_rewriting et deep_search sont ignores par l'endpoint
-    (docstring de iterative_query, api.py) : le QueryRewriter et ses
-    synonymes ne s'appliquent pas sur cette route,
+  - deep_search est ignore par l'endpoint,
   - la recherche B ne peut trouver que ce que la recherche A aurait pu
     trouver avec un meilleur vocabulaire : un tome absent de l'index
     reste invisible (mesure le 15 aout 2026 : volet paysager manquant a
@@ -120,7 +118,7 @@ def main():
     lignes = [
         f"CAMPAGNE {LABEL} : pipeline iteratif, avec et sans consigne",
         "=" * 78,
-        "route /api/query2   (enable_rewriting et deep_search ignores)",
+        "route /api/query2   (deep_search ignore)",
         "Recherche A identique a la route classique, puis analyse de",
         "couverture sur passages complets ; recherche B a quota reserve",
         "uniquement si PARTIEL. Plafond serveur : 1 round, 2 recherches.",
