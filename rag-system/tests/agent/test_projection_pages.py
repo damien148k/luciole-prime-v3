@@ -11,8 +11,6 @@ La fonction est extraite plutot que testee au travers de l'application
 pour eviter d'importer FastAPI et la pile d'inference dans la suite.
 """
 
-import importlib.util
-import sys
 from pathlib import Path
 
 RACINE = Path(__file__).resolve().parents[2]
