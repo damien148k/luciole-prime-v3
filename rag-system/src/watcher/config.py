@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 from loguru import logger
 
-from .models import WatcherConfig, WatchedPath  # noqa: F401 (ré-exporté par watcher/__init__.py)
+from .models import WatcherConfig
 
 
 # Chemin par défaut du fichier de configuration
