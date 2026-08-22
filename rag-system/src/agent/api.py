@@ -794,7 +794,12 @@ async def iterative_query(request: QueryRequest):
             history_dicts = [{"role": msg.role, "content": msg.content} for msg in request.history]
 
         analyzer = get_analyzer(index_name=_resolve_index_name(request.index_name))
-        pipeline = IterativePipeline(analyzer)
+        # Reglages query2 relus a chaque requete : un reload-config a
+        # chaud (UI feedback) les applique sans redemarrage.
+        pipeline = IterativePipeline(
+            analyzer,
+            query2_config=_get_config().get("query2", {}),
+        )
 
         start_time = time.time()
         result = pipeline.run(

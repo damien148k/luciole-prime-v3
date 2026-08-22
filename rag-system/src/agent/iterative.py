@@ -103,9 +103,9 @@ COVERAGE_MAX_QUERIES = 3
 QUOTA_PAR_REQUETE = 5
 
 # Inventaire des titres du corpus dans le prompt de couverture (v2.9).
-# Désactivable par QUERY2_CATALOGUE_COUVERTURE=false pour mesurer la
-# contribution du catalogue au benchmark, chemin nominal sinon inchangé.
-CATALOGUE_COUVERTURE_ACTIF = (
+# Réglable à chaud via settings.yaml (section query2) ; la variable
+# d'environnement QUERY2_CATALOGUE_COUVERTURE=false reste un repli.
+_CATALOGUE_COUVERTURE_ENV = (
     os.environ.get("QUERY2_CATALOGUE_COUVERTURE", "true").lower() == "true"
 )
 
@@ -122,9 +122,10 @@ CATALOGUE_PROMPT_MAX_TITRES = 100
 # sous-ensemble retenu pour la génération, bien qu'un autre extrait du
 # même tome le soit). Sans ce garde-fou, la recherche B ne se déclenche
 # jamais dans ce cas puisqu'elle ne dépend que du verdict du juge.
-# Désactivable par QUERY2_GARDE_CONTRADICTION=false pour mesurer l'apport
-# de ce garde-fou seul, chemin nominal sinon inchangé.
-GARDE_CONTRADICTION_ACTIF = (
+# Réglable à chaud via settings.yaml (section query2, éditable depuis
+# l'UI feedback) ; la variable d'environnement
+# QUERY2_GARDE_CONTRADICTION=false reste un repli.
+_GARDE_CONTRADICTION_ENV = (
     os.environ.get("QUERY2_GARDE_CONTRADICTION", "true").lower() == "true"
 )
 
@@ -249,17 +250,23 @@ _MOTS_VIDES = frozenset({
 # doivent jamais déclencher ni composer une requête d'inventaire.
 # Liste volontairement générique au domaine étude d'impact : les termes
 # propres au projet du corpus courant (nom du parc, de la commune, du
-# porteur...) se déclarent par instance via la variable d'environnement
-# QUERY2_TERMES_STRUCTURANTS="fort,paniere" — mesuré sur la Panière du
-# Fort : sans eux, les requêtes d'inventaire forcé incluent le nom du
-# projet, présent dans tous les titres, et se diluent.
-_TERMES_STRUCTURANTS = frozenset({
+# porteur...) se déclarent par instance via settings.yaml (section
+# query2.termes_structurants, éditable à chaud depuis l'UI feedback) ou,
+# en repli, la variable QUERY2_TERMES_STRUCTURANTS="fort,paniere" —
+# mesuré sur la Panière du Fort : sans eux, les requêtes d'inventaire
+# forcé incluent le nom du projet, présent dans tous les titres, et se
+# diluent.
+_TERMES_STRUCTURANTS_BASE = frozenset({
     "projet", "volet", "tome", "rnt", "impact", "impacts", "environnement",
-}) | frozenset(
+})
+
+_TERMES_STRUCTURANTS_ENV = frozenset(
     t.strip().lower()
     for t in os.environ.get("QUERY2_TERMES_STRUCTURANTS", "").split(",")
     if t.strip()
 )
+
+_TERMES_STRUCTURANTS = _TERMES_STRUCTURANTS_BASE | _TERMES_STRUCTURANTS_ENV
 
 
 def _normaliser_mot(mot: str) -> str:
@@ -301,7 +308,10 @@ def _sujet_enjeux(query: str) -> Optional[str]:
 
 
 def _regle_inventaire(
-    query: str, search_results: List[Dict], titres: List[str]
+    query: str,
+    search_results: List[Dict],
+    titres: List[str],
+    termes_structurants: Optional[frozenset] = None,
 ) -> Optional[Dict]:
     """Force PARTIEL quand un tome du sujet d'enjeux est absent des passages.
 
@@ -315,6 +325,8 @@ def _regle_inventaire(
     mots distinctifs du titre (hors termes structurants communs à tous
     les tomes) — jamais par le modèle.
     """
+    if termes_structurants is None:
+        termes_structurants = _TERMES_STRUCTURANTS
     if not titres:
         return None
     sujet = _sujet_enjeux(query)
@@ -344,7 +356,7 @@ def _regle_inventaire(
         termes: List[str] = []
         racines_vues = set()
         for mot in sorted(_mots_contenu(sujet)) + sorted(
-            m for m in _mots_contenu(titre) if m not in _TERMES_STRUCTURANTS
+            m for m in _mots_contenu(titre) if m not in termes_structurants
         ):
             racine = _racine(mot)
             if racine not in racines_vues:
@@ -527,9 +539,32 @@ class IterativePipeline:
     l'analyse de couverture et, si nécessaire, une recherche ciblée.
     """
 
-    def __init__(self, analyzer, catalogue: Optional[CatalogueDocuments] = None):
+    def __init__(
+        self,
+        analyzer,
+        catalogue: Optional[CatalogueDocuments] = None,
+        query2_config: Optional[Dict] = None,
+    ):
         self.analyzer = analyzer
         self._catalogue = catalogue
+
+        # Réglages query2, lus à chaque instanciation (donc à chaque
+        # requête /api/query2) : un reload-config à chaud les applique
+        # sans redémarrage. Priorité : settings.yaml > variable
+        # d'environnement > défaut.
+        cfg = query2_config or {}
+        self._garde_contradiction_actif = bool(
+            cfg.get("garde_contradiction", _GARDE_CONTRADICTION_ENV)
+        )
+        self._catalogue_couverture_actif = bool(
+            cfg.get("catalogue_couverture", _CATALOGUE_COUVERTURE_ENV)
+        )
+        termes_yaml = cfg.get("termes_structurants") or []
+        if isinstance(termes_yaml, str):
+            termes_yaml = [t.strip() for t in termes_yaml.split(",")]
+        self._termes_structurants = _TERMES_STRUCTURANTS | frozenset(
+            str(t).strip().lower() for t in termes_yaml if str(t).strip()
+        )
 
     def _catalogue_titres(self) -> List[str]:
         """Titres du corpus pour le prompt de couverture (v2.9).
@@ -538,7 +573,7 @@ class IterativePipeline:
         indisponibilité se traduit par une liste vide, ce qui laisse le
         prompt de couverture identique à la version sans catalogue.
         """
-        if not CATALOGUE_COUVERTURE_ACTIF:
+        if not self._catalogue_couverture_actif:
             return []
         if self._catalogue is None:
             bm25 = getattr(self.analyzer.hybrid_search, "bm25_search", None)
@@ -611,7 +646,10 @@ class IterativePipeline:
         # Règle d'inventaire déterministe (v2.10) : prioritaire sur le
         # verdict LLM, dont l'adhérence à la consigne d'inventaire n'est
         # pas garantie. Ne voit que les tomes présents dans l'index.
-        forcee = _regle_inventaire(query, search_results, titres)
+        forcee = _regle_inventaire(
+            query, search_results, titres,
+            termes_structurants=self._termes_structurants,
+        )
         if forcee is not None and verdict == "COUVERT":
             return {**forcee, "catalogue_titres": len(titres)}
 
@@ -674,7 +712,7 @@ class IterativePipeline:
         # juge (verdict COUVERT => requetes vide par construction), on
         # utilise la demande d'origine comme seule requete ciblee.
         if (
-            GARDE_CONTRADICTION_ACTIF
+            self._garde_contradiction_actif
             and couverture["verdict"] == "COUVERT"
             and _reponse_esquive(result_a.get("response", ""))
         ):

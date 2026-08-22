@@ -199,3 +199,21 @@ watcher:
   db_path: /app/backups/watcher/watcher.db
   api_port: 8090
   default_index_name: documents
+
+# Pipeline itératif query2 (route /api/query2). Tous ces réglages sont
+# relus à chaque requête : après édition, un simple reload-config depuis
+# l'UI feedback les applique — sans rebuild ni redémarrage.
+query2:
+  # Termes propres au projet du corpus (nom du parc, de la commune, du
+  # porteur...), exclus des requêtes d'inventaire forcé car présents
+  # dans tous les titres et donc non discriminants. Liste YAML ou
+  # chaîne séparée par virgules. Exemple pour la Panière du Fort :
+  #   termes_structurants: [fort, paniere]
+  termes_structurants: []
+  # Garde-fou contradiction juge/générateur : si le juge de couverture
+  # dit COUVERT mais que la réponse générée esquive la question, la
+  # recherche B est forcée (mesuré sur Beaumont Sud, cas beaumont-09).
+  garde_contradiction: true
+  # Inventaire des titres du corpus dans le prompt de couverture :
+  # un tome pertinent absent des passages force un verdict PARTIEL.
+  catalogue_couverture: true
