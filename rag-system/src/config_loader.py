@@ -9,7 +9,7 @@ Utilise le pattern Singleton pour éviter les chargements multiples.
 import yaml
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 from loguru import logger
 
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable
 
 
 def sanitize_index_name(name: str) -> str:

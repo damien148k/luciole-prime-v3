@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from src.watcher.models import DocumentState, DocumentStatus, WatcherConfig, WatchedPath
+from src.watcher.models import DocumentState, DocumentStatus, WatcherConfig
 from src.watcher.queue import JobQueue
 from src.watcher.reconciler import Reconciler
 from src.watcher.state import StateStore

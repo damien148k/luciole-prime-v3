@@ -33,18 +33,14 @@ from loguru import logger
 
 from .constants import (
     LOCK_ERRORS_WARN_THRESHOLD,
-    JOB_STATUS_COMPLETED,
-    JOB_STATUS_DEAD,
-    JOB_STATUS_FAILED,
     JOB_STATUS_IN_PROGRESS,
-    JOB_STATUS_PENDING,
     RETRY_BACKOFF_BASE,
     RETRY_BACKOFF_MULTIPLIER,
     RETRY_MAX_ATTEMPTS,
     RETRY_MAX_BACKOFF,
 )
 from .db import get_connection
-from .models import Job, JobStatus
+from .models import Job
 
 
 class JobQueue:

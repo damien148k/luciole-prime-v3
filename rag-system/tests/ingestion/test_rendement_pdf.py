@@ -14,7 +14,6 @@ Vérifie :
   - _split_oversized coupe de préférence sur une frontière de ligne
 """
 
-import re
 from pathlib import Path
 
 import pytest

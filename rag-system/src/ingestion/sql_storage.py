@@ -6,7 +6,7 @@ Mode OFFLINE compatible
 
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 import pandas as pd
 from loguru import logger
 

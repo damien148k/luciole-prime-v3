@@ -13,7 +13,6 @@ Implémente :
 import logging
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
-import numpy as np
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

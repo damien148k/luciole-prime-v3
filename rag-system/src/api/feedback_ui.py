@@ -14,11 +14,11 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime
-from fastapi import FastAPI, Request, Query, Form, Response
+from fastapi import FastAPI, Request, Query, Form
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 import httpx
 from loguru import logger
 import sys
@@ -36,8 +36,6 @@ try:
     from mail.api import router as mail_router
     from mail.db import init_tables as init_mail_tables
     from mail.scheduler import start_scheduler as start_mail_scheduler
-    from mail.scheduler import stop_scheduler as stop_mail_scheduler
-    from mail.state import DraftRepo as _DraftRepo
     _mail_available = True
     logger.info("Module mail chargé avec succès")
 except ImportError as _e:

@@ -7,13 +7,13 @@ V3 : Authentification cookie via config/auth.yaml
 import os
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List
 from datetime import datetime
 import json
 import yaml
 import sqlite3
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Form, UploadFile, File, Request, Response
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 from pydantic import BaseModel
 from loguru import logger

@@ -7,7 +7,6 @@ et vérifie que les jobs sont correctement récupérés au redémarrage.
 
 from pathlib import Path
 
-import pytest
 
 from src.watcher.db import init_db
 from src.watcher.models import JobStatus

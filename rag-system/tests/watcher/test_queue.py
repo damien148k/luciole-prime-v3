@@ -4,10 +4,7 @@ Tests unitaires — queue.py
 Vérifie : enqueue, dequeue, complete, fail, mark_dead, retry, recover
 """
 
-import time
-from pathlib import Path
 
-import pytest
 
 from src.watcher.models import JobStatus
 from src.watcher.queue import JobQueue

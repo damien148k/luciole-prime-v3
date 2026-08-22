@@ -17,7 +17,7 @@ from typing import List, Optional
 
 from loguru import logger
 
-from .config import MAIL_ATTACHMENTS_PATH, decrypt_secret
+from .config import decrypt_secret
 from .constants import CONNECTION_TIMEOUT_SECONDS, IMAP_FETCH_BATCH, TestStatus
 from .exceptions import (
     IMAPAuthError,
