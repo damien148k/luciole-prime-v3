@@ -11,15 +11,13 @@ Il doit être initialisé avant le montage du routeur (dans le lifespan).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from loguru import logger
 
 from .db import purge_tombstones, get_connection
-from .models import JobStatus
 
 router = APIRouter(prefix="/api/watcher", tags=["watcher"])
 

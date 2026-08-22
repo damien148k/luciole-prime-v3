@@ -22,7 +22,6 @@ Le IngestionPipeline existant (`src.ingestion.pipeline`) est réutilisé tel que
 from __future__ import annotations
 
 import threading
-import time
 import traceback
 from datetime import datetime
 from pathlib import Path

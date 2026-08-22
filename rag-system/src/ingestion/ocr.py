@@ -6,7 +6,7 @@ V3 : auto-device via resolve_device()
 """
 
 import os
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from pathlib import Path
 import io
 from loguru import logger

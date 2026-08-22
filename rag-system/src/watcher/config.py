@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 from loguru import logger
 
-from .models import WatcherConfig, WatchedPath
+from .models import WatcherConfig
 
 
 # Chemin par défaut du fichier de configuration

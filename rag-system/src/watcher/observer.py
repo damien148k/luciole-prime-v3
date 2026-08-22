@@ -22,9 +22,6 @@ from typing import TYPE_CHECKING, Optional
 
 from loguru import logger
 from watchdog.events import (
-    FileCreatedEvent,
-    FileDeletedEvent,
-    FileModifiedEvent,
     FileMovedEvent,
     FileSystemEvent,
     FileSystemEventHandler,
@@ -32,14 +29,12 @@ from watchdog.events import (
 from watchdog.observers.polling import PollingObserver
 
 from .constants import (
-    DEBOUNCE_SECONDS,
     DEFAULT_EXCLUDED_DIRS,
     IGNORED_EXTENSIONS,
     IGNORED_FILENAME_PREFIXES,
     JOB_ACTION_DELETE,
     JOB_ACTION_MOVE,
     JOB_ACTION_UPSERT,
-    MAX_FILE_SIZE_BYTES,
     SUPPORTED_DOCUMENT_EXTENSIONS,
 )
 from .index_routing import derive_index_name

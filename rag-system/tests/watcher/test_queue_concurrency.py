@@ -16,7 +16,6 @@ import sqlite3
 import threading
 import time
 
-import pytest
 
 from src.watcher.queue import JobQueue
 

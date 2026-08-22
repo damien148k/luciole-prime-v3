@@ -7,15 +7,13 @@ delete → suppression, move → mise à jour path, skip si contenu identique.
 Utilise des mocks pour le pipeline et les vector stores.
 """
 
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from src.watcher.cleanup import ChunkCleaner
-from src.watcher.db import get_connection
-from src.watcher.models import DocumentState, DocumentStatus, Job
+from src.watcher.models import DocumentStatus, Job
 from src.watcher.queue import JobQueue
 from src.watcher.state import StateStore
 from src.watcher.worker import IndexWorker

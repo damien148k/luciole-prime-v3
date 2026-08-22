@@ -9,7 +9,6 @@ Pour réactiver l'authentification, supprimer ce fichier override et
 redémarrer les conteneurs.
 """
 
-import os
 from typing import Optional
 
 AUTH_COOKIE_NAME = "luciole_admin"

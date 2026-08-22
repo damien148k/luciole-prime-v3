@@ -19,7 +19,6 @@ from pathlib import Path
 from loguru import logger
 
 from .constants import CONTENT_HASH_BLOCK_SIZE
-from .exceptions import FileNotStableError
 
 
 def quick_hash(path: Path) -> str:

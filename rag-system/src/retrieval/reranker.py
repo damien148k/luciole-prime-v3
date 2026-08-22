@@ -7,7 +7,6 @@ V3 : auto-device via resolve_device(), batch_size adaptatif
 import os
 from typing import List, Dict, Optional
 from pathlib import Path
-import torch
 from sentence_transformers import CrossEncoder
 from loguru import logger
 

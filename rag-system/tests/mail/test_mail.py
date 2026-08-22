@@ -7,13 +7,9 @@ guardrails, pipeline inbound (mocks).
 
 Lancer : cd rag-system && pytest tests/mail/ -v
 """
-import hashlib
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -33,7 +29,6 @@ def tmp_mail_db(tmp_path, monkeypatch):
     monkeypatch.setenv("MAIL_ATTACHMENTS_PATH", str(tmp_path / "attachments"))
     monkeypatch.setenv("MAIL_ENCRYPTION_KEY", "")
     # Réinitialiser le singleton _initialized
-    import importlib
     import src.mail.db as db_mod
     db_mod._initialized = False
     db_mod.MAIL_DB_PATH = db
@@ -49,7 +44,6 @@ def tmp_mail_db(tmp_path, monkeypatch):
 class TestDeduplication:
     def test_first_message_accepted(self):
         from src.mail.state import InboundRepo
-        from src.mail.models import InboundMessage
         assert not InboundRepo.exists("<test-msg-001@example.com>")
 
     def test_duplicate_detected(self):
@@ -628,9 +622,9 @@ class TestInboundPipelineMocked:
 
     def test_pipeline_creates_draft(self, monkeypatch):
         """Un email entrant valide doit créer un brouillon."""
-        from src.mail.models import RawEmail, MailSettings, InboundStatus
+        from src.mail.models import RawEmail, MailSettings
         from src.mail.inbound_service import InboundService
-        from src.mail.state import DraftRepo, InboundRepo
+        from src.mail.state import DraftRepo
 
         # Mock de l'appel RAG (Agent API)
         mock_rag_response = {
@@ -705,8 +699,6 @@ class TestInboundPipelineMocked:
         """Un auto-reply ne doit jamais appeler le RAG."""
         from src.mail.models import RawEmail, MailSettings
         from src.mail.inbound_service import InboundService
-        from src.mail.state import InboundRepo
-        from src.mail.constants import InboundStatus
 
         rag_called = []
 

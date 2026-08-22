@@ -9,7 +9,6 @@ V3 Constellation: refonte UI inspirée Claude/ChatGPT/Perplexity
 """
 
 import os
-import json
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, FileResponse

@@ -5,10 +5,9 @@ Vérifie : filtrage des événements, debounce, détection des extensions.
 Les tests utilisent des mocks — pas de watchdog réel.
 """
 
-import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

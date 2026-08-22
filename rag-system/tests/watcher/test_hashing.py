@@ -4,7 +4,6 @@ Tests unitaires — hashing.py
 Vérifie : quick_hash, content_hash, wait_stable
 """
 
-import time
 from pathlib import Path
 
 import pytest

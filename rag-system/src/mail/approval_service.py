@@ -9,7 +9,6 @@ prêt pour l'envoi par l'OutboundService.
 """
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Optional
 

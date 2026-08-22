@@ -9,7 +9,6 @@ pour une utilisation dans le contexte asyncio + run_in_executor.
 """
 from __future__ import annotations
 
-import json
 import sqlite3
 import threading
 from contextlib import contextmanager

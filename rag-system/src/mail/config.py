@@ -12,7 +12,6 @@ Stratégie de clé :
 from __future__ import annotations
 
 import os
-import secrets
 from pathlib import Path
 from typing import Optional
 
@@ -20,7 +19,7 @@ from loguru import logger
 
 # Fernet est dans le package 'cryptography' (à ajouter aux requirements)
 try:
-    from cryptography.fernet import Fernet, InvalidToken
+    from cryptography.fernet import Fernet
     _FERNET_AVAILABLE = True
 except ImportError:
     _FERNET_AVAILABLE = False
@@ -148,12 +147,6 @@ def decrypt_secret(ciphertext: str) -> Optional[str]:
         try:
             return _fernet.decrypt(ciphertext.encode("ascii")).decode("utf-8")
         except Exception:
-            if _FERNET_AVAILABLE:
-                try:
-                    from cryptography.fernet import InvalidToken
-                    pass
-                except ImportError:
-                    pass
             # Fallback : le texte n'était peut-être pas chiffré (migration)
             logger.warning("Déchiffrement échoué — le secret est peut-être en clair")
             return ciphertext

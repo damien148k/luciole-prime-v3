@@ -6,7 +6,6 @@ Vérifie : CRUD DocumentState, move, soft-delete, search
 
 from pathlib import Path
 
-import pytest
 
 from src.watcher.models import DocumentState, DocumentStatus
 from src.watcher.state import StateStore

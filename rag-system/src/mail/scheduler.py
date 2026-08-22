@@ -11,7 +11,6 @@ Implémenté comme une tâche asyncio (run_in_executor pour les appels bloquants
 from __future__ import annotations
 
 import asyncio
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 from loguru import logger

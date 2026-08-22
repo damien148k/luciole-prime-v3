@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 from loguru import logger
@@ -25,7 +24,7 @@ from loguru import logger
 from .cleanup import ChunkCleaner
 from .config import load_watcher_config
 from .constants import LOCK_ERRORS_WARN_THRESHOLD
-from .db import get_connection, init_db
+from .db import init_db
 from .models import WatcherConfig
 from .observer import FileWatcher
 from .queue import JobQueue
