@@ -92,8 +92,30 @@ dans `settings.yaml`. Il etait auparavant plafonne en dur a quinze dans
 
 ## Repere en vigueur
 
-Aucun. Le repere du 6 aout 2026 a ete retire : trois defauts cumules,
-tous decouverts le 7 aout, le rendent inexploitable.
+Beaumont Sud, 30 aout 2026 — premiere mesure a fenetre effective
+complete : 32768 tokens confirmes par sonde (api_format: ollama,
+Ollama 0.33.2, qwen2.5:14b-instruct-q4_K_M), verdict a trois etats,
+jeu de 15 remarques, pipeline avec PR #48 (deep_search) et #50.
+
+- standard : 0 esquive, 5 repond, 10 concede ; 11 COUVERT / 4 PARTIEL,
+  4 recherches B ; 23,6 min au total.
+- deep : 0 esquive, 6 repond, 9 concede ; 13 COUVERT / 2 PARTIEL,
+  2 recherches B ; 27,8 min (+18 %).
+- croisement : 3 ameliores (concede -> repond : beaumont-02, -04, -14),
+  2 degrades (repond -> concede : beaumont-01, -06). Les ameliores
+  gagnent un tome rendu (-02 gagne le tome 4, -14 le tome 1) — gain
+  de couverture reel. Les degrades ne perdent aucun tome : le modele
+  formule plus prudemment face a 30 passages (bruit accepte), ce que
+  le verdict compte concede.
+- controle de plomberie : 0 cas avec moins de passages en deep.
+
+Conclusion tiree ce jour : le profil deep est un mode d'exhaustivite
+a la demande (net +1 verdict, couverture meilleure, recherche B
+divisee par deux), pas un defaut — d'ou l'affichage fusionne de la
+PR #49 (standard en tete, pistes deep repliees dessous).
+
+L'ancien repere du 6 aout 2026 reste retire : trois defauts cumules,
+tous decouverts le 7 aout, le rendaient inexploitable.
 
 1. `num_ctx` n'etait jamais transmis a Ollama. La fenetre effective
    valait 2048 tokens au lieu des 16384 configures. Avec `keep=4`, la
@@ -103,10 +125,6 @@ tous decouverts le 7 aout, le rendent inexploitable.
    quelle que soit la valeur de `rerank_top_n`.
 3. Le detecteur d'esquive ne reconnaissait que les formulations au
    pluriel. Une esquive au singulier etait comptee comme une reponse.
-
-Une nouvelle mesure est a etablir sur le pipeline corrige. Tant qu'elle
-n'est pas faite, cette section reste vide : mieux vaut aucun repere qu'un
-repere faux.
 
 Le 30 aout 2026, la sonde a retrouve le meme defaut sur l'instance mrae
 reinstallee : 2048 tokens effectifs malgre `num_ctx: 16384`. Depuis,
