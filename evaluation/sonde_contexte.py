@@ -50,6 +50,7 @@ def main():
     print(f"Sonde de contexte — {BASE} — modele {MODELE}")
     print("-" * 70)
     plafond = None
+    lus_precedent = 0
     for cible in TAILLES:
         # Remplissage : mots distincts pour eviter une tokenisation
         # anormalement compacte d'une repetition exacte.
@@ -58,20 +59,29 @@ def main():
         res = appeler([{"role": "user", "content": prompt}])
         usage = res.get("usage", {}) or {}
         lus = usage.get("prompt_tokens", -1)
-        envoyes_estime = cible * 2  # borne haute grossiere
-        tronque = lus < cible  # si le serveur a vu moins que le nombre
-                               # de mots, il a forcement tronque
+        # Deux signaux de troncature : moins de tokens lus que de mots
+        # envoyes (ratio plancher 1), ou un plateau — les tokens cessent
+        # de croitre entre deux cibles (le remplissage motNNN tokenise a
+        # ~4,8 tokens/mot, un ratio 2 sous-estimait et laissait passer
+        # des plafonds : 16386 lus pour 9000 mots s'affichait "ok" le
+        # 2026-08-30 alors que la fenetre valait 16384).
+        tronque = lus < cible
+        plateau = 0 < lus <= lus_precedent + 50
         print(f"  cible ~{cible:5} mots -> prompt_tokens={lus:6} "
-              f"{'TRONQUE' if tronque else 'ok'}")
-        if tronque and plafond is None:
+              f"{'TRONQUE' if tronque else ('PLAFOND' if plateau else 'ok')}")
+        if (tronque or plateau) and plafond is None:
             plafond = lus
+        lus_precedent = lus
 
     print("-" * 70)
     if plafond:
         print(f"Plafond effectif : ~{plafond} tokens (le serveur tronque).")
     else:
         print(f"Aucune troncature jusqu'a {TAILLES[-1]} mots "
-              f"(~{TAILLES[-1] * 2} tokens).")
+              f"(~{TAILLES[-1] * 5} tokens).")
+    print("Note : le test du marqueur ci-dessous utilise 9000 mots "
+          "(~43000 tokens) ; il echoue par construction sur toute fenetre "
+          "<= 32768. Seul le plafond mesure ci-dessus compte.")
 
     # Test fonctionnel : le marqueur de tete survit-il a un prompt long ?
     mots = " ".join(f"mot{i}" for i in range(9000))
@@ -89,8 +99,9 @@ def main():
     print("Lecture : un prompt RAG de 25 passages x ~1000 caracteres")
     print("represente 8000-12000 tokens. Si le plafond est 4096, les")
     print("premiers passages du prompt n'atteignent jamais le modele.")
-    print("Correctif cote serveur : OLLAMA_CONTEXT_LENGTH=8192 dans")
-    print("l'environnement du service ollama, puis redemarrage.")
+    print("Correctifs : api_format: ollama + num_ctx dans settings.yaml")
+    print("(API native, par requete) ou OLLAMA_CONTEXT_LENGTH=32768 dans")
+    print("l'environnement du service ollama, puis recreer le conteneur.")
     return 0
 
 

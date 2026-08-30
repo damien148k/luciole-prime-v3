@@ -59,6 +59,18 @@ class LLMGenerator:
         base = env_url if env_url else yaml_url
         self.base_url = base if base.endswith("/v1") else f"{base}/v1"
 
+        # api_format : "openai" (defaut — endpoint /v1/chat/completions,
+        # TRT-LLM et Ollama le servent tous deux) ou "ollama" (API native
+        # /api/chat). La cle existait dans settings.yaml sans jamais etre
+        # lue : elle choisit desormais le chemin d'appel. C'est le seul
+        # moyen de transmettre num_ctx a la requete : sur l'endpoint
+        # compatible OpenAI, Ollama l'ignore et applique la fenetre du
+        # serveur (mesure du 2026-08-30 : 2048 tokens effectifs malgre
+        # num_ctx=16384 dans settings.yaml — cf. evaluation/README.md).
+        self.api_format = llm_config.get("api_format", "openai")
+        # Base sans suffixe /v1, pour l'API native Ollama (/api/chat).
+        self.native_base = base[:-3] if base.endswith("/v1") else base
+
         # Nom du modèle exposé par le serveur TRT-LLM (= SERVED_MODEL_NAME)
         self.model       = llm_config.get("model",       "qwen3-30b-a3b-instruct")
         # Temperature 0 par defaut : la boucle agentique est une cascade, une
@@ -159,7 +171,9 @@ class LLMGenerator:
     # =========================================================================
 
     def _call_llm(self, messages: list) -> str:
-        """HTTP POST vers /v1/chat/completions (standard OpenAI / TRT-LLM)."""
+        """Point d'appel HTTP unique : natif Ollama ou compatible OpenAI."""
+        if self.api_format == "ollama":
+            return self._call_llm_ollama(messages)
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model":       self.model,
@@ -174,10 +188,11 @@ class LLMGenerator:
         # inconnu a un backend qui ne le gere pas.
         if self.seed is not None:
             payload["seed"] = self.seed
-        # num_ctx etait lu a l'initialisation et jamais transmis. Ollama
-        # l'accepte via `options` sur son API native ; sur l'endpoint
-        # compatible OpenAI il est ignore, la fenetre venant du Modelfile.
-        # On le journalise donc plutot que de laisser croire qu'il agit.
+        # Sur ce chemin (endpoint compatible OpenAI), num_ctx reste non
+        # transmis : Ollama l'y ignore, la fenetre venant du serveur
+        # (OLLAMA_CONTEXT_LENGTH ou Modelfile). Pour le piloter depuis
+        # settings.yaml, utiliser api_format: ollama. On le journalise
+        # plutot que de laisser croire qu'il agit.
         if self.num_ctx and not getattr(self, "_num_ctx_signale", False):
             logger.info(
                 f"num_ctx={self.num_ctx} lu depuis la configuration mais non "
@@ -200,6 +215,46 @@ class LLMGenerator:
             )
         except Exception as e:
             logger.error(f"Erreur API TRT-LLM: {e}")
+            raise
+
+    def _call_llm_ollama(self, messages: list) -> str:
+        """HTTP POST vers /api/chat (API native Ollama).
+
+        Seul ce chemin transmet num_ctx (et le germe) via `options` : la
+        fenetre devient pilotable depuis settings.yaml, instance par
+        instance, sans toucher au serveur. num_predict replique max_tokens
+        du chemin OpenAI pour garder les deux formats interchangeables.
+        """
+        url = f"{self.native_base}/api/chat"
+        options = {
+            "temperature": self.temperature,
+            "num_predict": self.max_tokens,
+        }
+        if self.seed is not None:
+            options["seed"] = self.seed
+        if self.num_ctx:
+            options["num_ctx"] = self.num_ctx
+        payload = {
+            "model":    self.model,
+            "messages": messages,
+            "stream":   False,
+            "options":  options,
+        }
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                r = client.post(url, json=payload)
+                r.raise_for_status()
+                return r.json()["message"]["content"]
+        except httpx.TimeoutException:
+            raise RuntimeError(
+                f"Ollama timeout ({self.timeout}s) — vérifiez que le modèle est chargé."
+            )
+        except httpx.ConnectError:
+            raise RuntimeError(
+                f"Ollama inaccessible ({self.native_base}) — vérifiez que le service est démarré."
+            )
+        except Exception as e:
+            logger.error(f"Erreur API Ollama: {e}")
             raise
 
     # =========================================================================
