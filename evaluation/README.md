@@ -92,8 +92,45 @@ dans `settings.yaml`. Il etait auparavant plafonne en dur a quinze dans
 
 ## Repere en vigueur
 
-Aucun. Le repere du 6 aout 2026 a ete retire : trois defauts cumules,
-tous decouverts le 7 aout, le rendent inexploitable.
+Beaumont Sud, 30 aout 2026, corpus complet (Tome 5 ingere) —
+premiere mesure a fenetre effective complete : 32768 tokens confirmes
+par sonde (api_format: ollama, Ollama 0.33.2, qwen2.5:14b-instruct-
+q4_K_M), verdict a trois etats, jeu de 15 remarques, pipeline avec
+PR #48 (deep_search) et #50.
+
+- standard : 0 esquive, 5 repond, 10 concede ; 13 COUVERT / 2 PARTIEL,
+  2 recherches B ; 23,3 min au total.
+- deep : 0 esquive, 10 repond, 5 concede ; 11 COUVERT / 4 PARTIEL,
+  4 recherches B ; 29,8 min (+28 %).
+- croisement : 6 ameliores (concede -> repond : beaumont-02, -04, -05,
+  -09, -13, -15), 1 degrade (repond -> concede : beaumont-11). Le
+  Tome 5 (Paysage et Patrimoine) est rendu sur 7 cas en deep contre
+  4 en standard — le profil elargi exploite mieux un corpus riche.
+- controle de plomberie : 0 cas avec moins de passages en deep.
+- vigilance : beaumont-03 et beaumont-15 ont une reference vide
+  (esquive legitime attendue par convention du jeu). Le 03 reste
+  concede dans les deux bras ; le 15 passe a repond en deep — a
+  relire humainement : si la reponse est reellement fondee sur des
+  passages du dossier, c'est l'annotation du jeu qu'il faut corriger,
+  pas le pipeline.
+
+Conclusion tiree ce jour : sur corpus complet, l'ecart se creuse en
+faveur du deep (net +5 verdicts) — le profil elargi est un mode
+d'exhaustivite a la demande, d'autant plus utile que le corpus est
+riche. L'affichage fusionne (PR #49) reste la bonne ergonomie :
+standard en tete, pistes deep repliees dessous.
+
+Note historique : une mesure le meme jour sur corpus incomplet (Tome
+5, 846 Mo, refuse par la limite WATCHER_MAX_FILE_SIZE_MB du watcher)
+donnait deep 6 repond et un croisement +3/-2. Apres releve de la
+limite et ingestion du tome, le deep est passe a 10 repond :
+l'exhaustivite du corpus compte autant que le pipeline. La mesure
+intermediaire est conservee sur l'instance mrae dans
+campagne_query2_deep.jsonl (run sans suffixe) — label du repere :
+query2_deep_corpus_complet.
+
+L'ancien repere du 6 aout 2026 reste retire : trois defauts cumules,
+tous decouverts le 7 aout, le rendaient inexploitable.
 
 1. `num_ctx` n'etait jamais transmis a Ollama. La fenetre effective
    valait 2048 tokens au lieu des 16384 configures. Avec `keep=4`, la
@@ -103,10 +140,6 @@ tous decouverts le 7 aout, le rendent inexploitable.
    quelle que soit la valeur de `rerank_top_n`.
 3. Le detecteur d'esquive ne reconnaissait que les formulations au
    pluriel. Une esquive au singulier etait comptee comme une reponse.
-
-Une nouvelle mesure est a etablir sur le pipeline corrige. Tant qu'elle
-n'est pas faite, cette section reste vide : mieux vaut aucun repere qu'un
-repere faux.
 
 Le 30 aout 2026, la sonde a retrouve le meme defaut sur l'instance mrae
 reinstallee : 2048 tokens effectifs malgre `num_ctx: 16384`. Depuis,
