@@ -37,6 +37,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# PowerShell 7.3+ transforme tout texte stderr d'une commande externe en
+# erreur terminante (NativeCommandError), meme derriere `2>&1 | Out-Null` --
+# un simple warning pip/docker suffit alors a arreter le script. On revient
+# au comportement historique (PowerShell 5.1) : seul $LASTEXITCODE fait foi.
+if (Test-Path Variable:\PSNativeCommandUseErrorActionPreference) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
 $ProjectRoot = $PSScriptRoot
 Set-Location $ProjectRoot
 
@@ -49,6 +56,16 @@ function Write-Step {
     Write-Host ""
     Write-Host ">> $Msg" -ForegroundColor Cyan
     Write-Host ("-" * 60)
+}
+
+function Write-OK {
+    param([string]$Message)
+    Write-Host "  [OK] $Message" -ForegroundColor Green
+}
+
+function Write-Warn {
+    param([string]$Message)
+    Write-Host "  [!] $Message" -ForegroundColor Yellow
 }
 
 function Assert-Command {
@@ -436,14 +453,26 @@ if (Test-Path $ollamaCaFile) {
 # deja linux x86_64 / python 3.11, pip resout nativement les wheels
 # manylinux_2_17 / manylinux_2_28 (que --platform manylinux2014 exclurait).
 Write-Host "  Mise a niveau de pip dans le container..."
+# pip ecrit son warning "running as root" sur stderr ; sous PowerShell 7.3+
+# cela deviendrait une erreur terminante malgre le Out-Null (cf. fix
+# $PSNativeCommandUseErrorActionPreference plus haut). On neutralise aussi
+# localement par securite.
+$ErrorActionPreference = "Continue"
 docker exec $pipContainerName pip install --quiet --upgrade pip 2>&1 | Out-Null
+$ErrorActionPreference = "Stop"
 
 $reqFileAbs = Join-Path $PSScriptRoot $reqFile
 Write-Host "  Telechargement des wheels depuis $reqFile..."
 Write-Host "  (plateforme cible : linux x86_64, python 3.11 -- resolution native)"
 docker cp $reqFileAbs "${pipContainerName}:/tmp/requirements.txt"
 $ErrorActionPreference = "Continue"
-docker exec $pipContainerName pip download -r /tmp/requirements.txt -d /output --only-binary=:all: 2>&1 | ForEach-Object { if ($_ -notmatch "^(WARNING|ERROR)") { Write-Host "  $_" } }
+# extract-msg==0.48.0 epingle red-black-tree-mod==1.20, qui n'a jamais
+# publie de wheel sur PyPI (sdist uniquement, verifie sur toutes ses
+# versions). --only-binary=:all: ne peut donc jamais resoudre cette
+# dependance -- on l'autorise seule a se construire depuis la source
+# (pur Python, sans compilation). On n'utilise plus le filtre
+# WARNING|ERROR qui masquait le vrai message d'echec de pip.
+docker exec $pipContainerName pip download -r /tmp/requirements.txt -d /output --only-binary=:all: --no-binary=red-black-tree-mod 2>&1 | ForEach-Object { Write-Host "  $_" }
 $reqExit = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
 if ($reqExit -ne 0) {
