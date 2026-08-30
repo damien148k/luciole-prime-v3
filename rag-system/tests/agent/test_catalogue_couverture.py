@@ -23,6 +23,7 @@ from src.agent.iterative import (  # noqa: E402
     COVERAGE_USER_TEMPLATE,
     COVERAGE_USER_TEMPLATE_CATALOGUE,
     IterativePipeline,
+    _TERMES_STRUCTURANTS_BASE,
     _formater_titres,
     _mots_contenu,
     _regle_inventaire,
@@ -223,8 +224,12 @@ def test_sans_catalogue_le_prompt_est_identique_a_la_v28():
 def test_catalogue_desactive_par_environnement(monkeypatch):
     """QUERY2_CATALOGUE_COUVERTURE=false rend le comportement v2.8."""
     monkeypatch.setenv("QUERY2_CATALOGUE_COUVERTURE", "false")
-    # La constante est lue au chargement : on la force pour le test.
-    monkeypatch.setattr("src.agent.iterative.CATALOGUE_COUVERTURE_ACTIF", False)
+    # Le flag est lu à l'instanciation du pipeline : on force le défaut
+    # que la config YAML surchargera (le module ne publie plus de
+    # constante CATALOGUE_COUVERTURE_ACTIF — cassé depuis le commit
+    # « réglages à chaud » du 22 août 2026, où l'override par défaut est
+    # devenu la variable privée _CATALOGUE_COUVERTURE_ENV).
+    monkeypatch.setattr("src.agent.iterative._CATALOGUE_COUVERTURE_ENV", False)
     llm = _LLMFactice()
     analyzer = _AnalyzerFactice(_BM25Factice(_ClientFactice()), llm)
     pipe = _pipeline(analyzer)
@@ -257,13 +262,21 @@ def test_mots_contenu_normalise_accents_et_pluriels():
 
 
 def test_regle_inventaire_detecte_le_tome_absent():
-    """Cas mesuré : « enjeux paysagers » sans le volet paysager."""
+    """Cas mesuré : « enjeux paysagers » sans le volet paysager.
+
+    Le corpus est celui de la Panière du Fort : les termes propres au
+    projet sont explicitement déclarés (rôle de
+    query2.termes_structurants dans settings.yaml, qui restait vide dans
+    la constante partagée — d'où l'échec de ce test depuis le 22 août
+    2026, passé inaperçu).
+    """
     passages = [
         {"file_name": TITRES_CORPS[3]},  # RNT
         {"file_name": TITRES_CORPS[0]},  # volet projet
     ]
     forcee = _regle_inventaire(
-        "quels sont les enjeux paysagers ?", passages, TITRES_CORPS
+        "quels sont les enjeux paysagers ?", passages, TITRES_CORPS,
+        termes_structurants=_TERMES_STRUCTURANTS_BASE | {"fort", "paniere"},
     )
     assert forcee is not None
     assert forcee["verdict"] == "PARTIEL"

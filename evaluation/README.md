@@ -15,6 +15,8 @@ docker exec luciole-agent-<instance> python /app/evaluation/<outil>.py
 | `preparer_determinisme.py` | compare le code execute a une reference, relit `temperature` et `seed`, et peut les poser avec sauvegarde horodatee. |
 | `campagne_consigne.py` | rejoue un jeu de questions sur le pipeline procedural, avec ou sans consigne de generation, et compte les esquives. |
 | `campagne_reproductibilite.py` | rejoue deux fois le meme bras et mesure le plancher de bruit, en comparant les reponses au caractere. |
+| `campagne_query2.py` | rejoue un jeu de remarques sur le pipeline iteratif `/api/query2` et compte les esquives, le bon tome et les verdicts de couverture. |
+| `campagne_query2_deep.py` | rejoue le meme jeu deux fois sur `/api/query2` — `deep_search` desactive puis active — et croise les verdicts cas par cas (ameliores / degrades), avec controle de plomberie sur le nombre de passages soumis au modele. |
 | `exporter_echanges.py` | exporte les echanges de l'interface depuis les bases de journalisation, avec les verdicts, pour relecture. |
 | `diag_rappel_pages.py` | extraction des references de tome et de page, utilisee par les campagnes. |
 
