@@ -102,6 +102,29 @@ COVERAGE_MAX_QUERIES = 3
 # (quota de diversité : empêche le sujet dominant d'écraser les manques).
 QUOTA_PAR_REQUETE = 5
 
+# Profil « recherche approfondie » (deep_search=true) : entonnoir de
+# retrieval élargi pour remonter plus de passages, au prix de bruit et
+# de latence. Ce sont les DÉFAUTS du mode deep ; chaque clé est
+# surchargeable dans settings.yaml (section query2.deep, relue à chaque
+# requête — un reload-config applique les edits sans redémarrage).
+# Le mode standard (deep_search=false) reste gouverné par les constantes
+# ci-dessus et la section retrieval de l'instance : comportement
+# strictement inchangé quand le mode deep n'est pas demandé.
+DEEP_DEFAULTS = {
+    "bm25_top_k": 80,            # pool brut BM25 par recherche (standard : 40)
+    "dense_top_k": 80,           # pool brut dense par recherche (standard : 40)
+    "search_top_k": 200,         # sortie de fusion RRF (standard : 100, LIMITS standard)
+    "fusion_top_k": 60,          # pool soumis au reranker (standard : 30)
+    "rerank_top_n": 30,          # passages conservés pour le LLM (standard : 15)
+    "coverage_max_passages": 20, # passages lus par le juge de couverture (standard : 12)
+    "coverage_max_queries": 4,   # requêtes ciblées max (standard : 3)
+    "quota_par_requete": 6,      # places garanties par requête ciblée (standard : 5)
+}
+# Budget contexte à surveiller côté backend LLM : 20 passages x 1200
+# caractères ~ 8k tokens pour le juge, et 30 passages complets pour la
+# génération (~15-20k tokens selon le chunker) — le mode deep suppose
+# une fenêtre >= 32k (GX10/TensorRT-LLM ; vérifier num_ctx sous Ollama).
+
 # Inventaire des titres du corpus dans le prompt de couverture (v2.9).
 # Réglable à chaud via settings.yaml (section query2) ; la variable
 # d'environnement QUERY2_CATALOGUE_COUVERTURE=false reste un repli.
@@ -312,6 +335,7 @@ def _regle_inventaire(
     search_results: List[Dict],
     titres: List[str],
     termes_structurants: Optional[frozenset] = None,
+    max_queries: int = COVERAGE_MAX_QUERIES,
 ) -> Optional[Dict]:
     """Force PARTIEL quand un tome du sujet d'enjeux est absent des passages.
 
@@ -352,7 +376,7 @@ def _regle_inventaire(
     # Requête assemblée par code : mots du sujet puis mots distinctifs
     # du titre, dédupliqués par racine (« paysagers » absorbe « paysager »).
     requetes = []
-    for titre in absents[:COVERAGE_MAX_QUERIES]:
+    for titre in absents[:max_queries]:
         termes: List[str] = []
         racines_vues = set()
         for mot in sorted(_mots_contenu(sujet)) + sorted(
@@ -566,6 +590,49 @@ class IterativePipeline:
             str(t).strip().lower() for t in termes_yaml if str(t).strip()
         )
 
+        # Profil deep : défauts du code + surcharges settings.yaml
+        # (clés inconnues ignorées, valeurs forcées en int — une chaîne
+        # YAML mal quotée ne doit pas casser la requête).
+        self._deep = dict(DEEP_DEFAULTS)
+        deep_yaml = cfg.get("deep") or {}
+        if isinstance(deep_yaml, dict):
+            for cle, valeur in deep_yaml.items():
+                if cle not in DEEP_DEFAULTS:
+                    logger.warning(f"query2.deep: clé inconnue ignorée: {cle}")
+                    continue
+                try:
+                    self._deep[cle] = int(valeur)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        f"query2.deep.{cle}={valeur!r} illisible, "
+                        f"défaut conservé ({DEEP_DEFAULTS[cle]})"
+                    )
+
+    def _parametres(self, deep: bool) -> Dict:
+        """Paramètres effectifs de l'entonnoir pour cette exécution.
+
+        deep=False : réglages courants de l'instance (constantes du
+        module + section retrieval de settings.yaml, lus via l'analyzer).
+        deep=True : profil élargi (query2.deep).
+        """
+        if deep:
+            return dict(self._deep)
+        # Lecture tolérante (getattr) : un analyzer factice de test ne
+        # porte pas forcément LIMITS — les défauts reproduisent alors le
+        # comportement historique (100/30/15).
+        limits = getattr(self.analyzer, "LIMITS", None) or {}
+        standard = limits.get("standard", {}) if isinstance(limits, dict) else {}
+        return {
+            "bm25_top_k": None,   # None = réglage retrieval de l'instance
+            "dense_top_k": None,
+            "search_top_k": standard.get("max_total_chunks", 100),
+            "fusion_top_k": getattr(self.analyzer, "fusion_top_k", 30),
+            "rerank_top_n": getattr(self.analyzer, "rerank_top_n", 15),
+            "coverage_max_passages": COVERAGE_MAX_PASSAGES,
+            "coverage_max_queries": COVERAGE_MAX_QUERIES,
+            "quota_par_requete": QUOTA_PAR_REQUETE,
+        }
+
     def _catalogue_titres(self) -> List[str]:
         """Titres du corpus pour le prompt de couverture (v2.9).
 
@@ -583,17 +650,27 @@ class IterativePipeline:
     # ------------------------------------------------------------------
     # Étape 2 — analyse de couverture
     # ------------------------------------------------------------------
-    def _analyse_couverture(self, query: str, search_results: List[Dict]) -> Dict:
+    def _analyse_couverture(
+        self, query: str, search_results: List[Dict],
+        params: Optional[Dict] = None,
+    ) -> Dict:
         """1 appel LLM sur les passages COMPLETS. Verdict structuré.
 
         En cas d'échec de parsing ou d'appel : repli sur COUVERT, c'est-à-dire
-        comportement identique à la route classique (jamais pire)."""
+        comportement identique à la route classique (jamais pire).
+
+        params : paramètres effectifs de l'exécution (voir _parametres) —
+        le mode deep y élargit le nombre de passages lus et de requêtes
+        ciblées produites."""
+        p = params or self._parametres(deep=False)
+        max_passages = p["coverage_max_passages"]
+        max_queries = p["coverage_max_queries"]
         titres = self._catalogue_titres()
         defaut = {"verdict": "COUVERT", "manques": [], "requetes": [],
                   "catalogue_titres": len(titres)}
 
         passages = []
-        for chunk in search_results[:COVERAGE_MAX_PASSAGES]:
+        for chunk in search_results[:max_passages]:
             texte = _texte_passage(chunk)[:COVERAGE_PASSAGE_CHARS]
             if texte:
                 passages.append(f"[{_etiquette_passage(chunk)}]\n{texte}")
@@ -604,7 +681,7 @@ class IterativePipeline:
             prompt = COVERAGE_USER_TEMPLATE_CATALOGUE.format(
                 query=query,
                 passages=bloc_passages,
-                max_q=COVERAGE_MAX_QUERIES,
+                max_q=max_queries,
                 titres=_formater_titres(titres),
             )
         else:
@@ -612,7 +689,7 @@ class IterativePipeline:
             prompt = COVERAGE_USER_TEMPLATE.format(
                 query=query,
                 passages=bloc_passages,
-                max_q=COVERAGE_MAX_QUERIES,
+                max_q=max_queries,
             )
 
         try:
@@ -641,7 +718,7 @@ class IterativePipeline:
             requetes = [str(requetes)]
         # Garder des requêtes non vides, plafonnées
         requetes = [r.strip() for r in requetes if isinstance(r, str) and r.strip()]
-        requetes = requetes[:COVERAGE_MAX_QUERIES]
+        requetes = requetes[:max_queries]
 
         # Règle d'inventaire déterministe (v2.10) : prioritaire sur le
         # verdict LLM, dont l'adhérence à la consigne d'inventaire n'est
@@ -649,6 +726,7 @@ class IterativePipeline:
         forcee = _regle_inventaire(
             query, search_results, titres,
             termes_structurants=self._termes_structurants,
+            max_queries=max_queries,
         )
         if forcee is not None and verdict == "COUVERT":
             return {**forcee, "catalogue_titres": len(titres)}
@@ -669,16 +747,39 @@ class IterativePipeline:
         custom_prompt: Optional[str] = None,
         history: Optional[List[Dict]] = None,
         max_rounds: int = 1,
+        deep: bool = False,
     ) -> Dict:
         """Exécute le pipeline. Retourne le résultat analyze() de l'étape
-        finale, augmenté d'une clé 'iterative' tracant la couverture."""
+        finale, augmenté d'une clé 'iterative' tracant la couverture.
+
+        deep=True active le profil « recherche approfondie » : entonnoir
+        de retrieval élargi (query2.deep dans settings.yaml) appliqué sur
+        les deux recherches et sur l'analyse de couverture. La structure
+        fixe en 4 étapes est INCHANGÉE — seule l'amplitude des recherches
+        varie, jamais la marche du pipeline.
+        """
+
+        params = self._parametres(deep)
 
         options = {"max_items": top_k}
         if custom_prompt:
             options["custom_prompt"] = custom_prompt
+        if deep:
+            options["retrieval_overrides"] = {
+                cle: params[cle]
+                for cle in ("search_top_k", "fusion_top_k",
+                            "rerank_top_n", "bm25_top_k", "dense_top_k")
+            }
+            logger.info(
+                f"query2: mode deep actif "
+                f"(fusion={params['fusion_top_k']}, "
+                f"top_n={params['rerank_top_n']}, "
+                f"pools={params['bm25_top_k']}/{params['dense_top_k']})"
+            )
 
         trace = {
             "version": "pipeline_iteratif_v2",
+            "mode": "deep" if deep else "standard",
             "recherche_a": None,
             "couverture": None,
             "recherche_b": {"effectuee": False, "requetes": []},
@@ -696,7 +797,7 @@ class IterativePipeline:
         logger.info(f"query2: recherche A -> {len(search_a)} passages")
 
         # ---------------- Étape 2 : analyse de couverture -----------------
-        couverture = self._analyse_couverture(query, search_a)
+        couverture = self._analyse_couverture(query, search_a, params)
         trace["couverture"] = couverture
         logger.info(
             f"query2: couverture={couverture['verdict']}, "
@@ -744,7 +845,8 @@ class IterativePipeline:
             logger.info(f"query2: demande transformee en question directe")
 
         result_b = self._recherche_b_quota(
-            query, question, couverture["requetes"], options, history, trace
+            query, question, couverture["requetes"], options, history, trace,
+            params=params,
         )
         result_b["iterative"] = trace
         return result_b
@@ -857,12 +959,13 @@ class IterativePipeline:
         options: Dict,
         history: Optional[List[Dict]],
         trace: Dict,
+        params: Optional[Dict] = None,
     ) -> Dict:
         """Recherche B avec places garanties pour les requêtes ciblées.
 
         Chaque requête ciblée effectue sa propre recherche hybride suivie
         d'un rerank CONTRE ELLE-MÊME (et non contre la demande d'origine),
-        puis réserve QUOTA_PAR_REQUETE passages dans le top final. Le
+        puis réserve quota_par_requete passages dans le top final. Le
         reste du top est rempli par la recherche générale sur la QUESTION
         REFORMULÉE, rerankée normalement — identique à la route classique.
 
@@ -875,12 +978,16 @@ class IterativePipeline:
             query: demande d'origine (conservée pour la trace)
             question: forme question de la demande (recherche générale
                 et génération)
+            params: paramètres effectifs de l'exécution (voir _parametres)
+                — profil standard ou deep élargi.
         """
         analyzer = self.analyzer
         hs = analyzer.hybrid_search
         rr = analyzer.reranker
-        fusion_k = analyzer.fusion_top_k          # pool avant rerank (60)
-        top_n = analyzer.rerank_top_n             # passages au LLM (30)
+        p = params or self._parametres(deep=False)
+        fusion_k = p["fusion_top_k"]              # pool avant rerank
+        top_n = p["rerank_top_n"]                 # passages au LLM
+        quota = p["quota_par_requete"]            # places par requête ciblée
         custom_prompt = options.get("custom_prompt")
 
         def _cid(chunk: Dict):
@@ -893,9 +1000,17 @@ class IterativePipeline:
         def _cherche_et_rerank(q: str) -> List[Dict]:
             """Recherche hybride + rerank contre q, comme la route
             classique mais avec q comme unique requête."""
-            resultats = hs.search(q, top_k=analyzer.LIMITS["standard"]["max_total_chunks"])
+            resultats = hs.search(
+                q,
+                top_k=p["search_top_k"],
+                bm25_top_k=p["bm25_top_k"],
+                dense_top_k=p["dense_top_k"],
+            )
             if rr and resultats:
-                resultats = rr.rerank(q, resultats[:fusion_k])
+                # Pas de troncature à top_n ici : le quota protégé prélève
+                # ensuite dans le classement COMPLET (quota têtes de liste
+                # par requête), puis le top final est assemblé à part.
+                resultats = rr.rerank(q, resultats[:fusion_k], top_n=fusion_k)
             return resultats
 
         # ---- Voie générale : la question reformulée --------------------
@@ -928,7 +1043,7 @@ class IterativePipeline:
                     "rang": pris + 1,
                 })
                 pris += 1
-                if pris >= QUOTA_PAR_REQUETE:
+                if pris >= quota:
                     break
 
         # ---- Assemblage : protégés d'abord, puis généraux --------------
@@ -949,6 +1064,11 @@ class IterativePipeline:
             "requetes": requetes_ciblees,
             "proteges": detail_quota,
             "passages_finaux": len(final),
+            "parametres": {
+                "fusion_top_k": fusion_k,
+                "rerank_top_n": top_n,
+                "quota_par_requete": quota,
+            },
         }
         logger.info(
             f"query2: recherche B quota -> {len(proteges)} proteges, "
@@ -958,7 +1078,7 @@ class IterativePipeline:
         # ---- Génération : appels identiques à la route classique -------
         # Le LLM reçoit la question reformulée après « Question : » —
         # jamais la recommandation administrative brute.
-        context = analyzer._build_context(final)
+        context = analyzer._build_context(final, top_n=top_n)
         llm_result = analyzer.llm_generator.generate(
             question,
             context,

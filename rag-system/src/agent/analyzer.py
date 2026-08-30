@@ -135,7 +135,8 @@ class DocumentAnalyzer:
         elif mode == "cross":
             result = self._analyze_cross(query, scope, detail_level, max_items)
         else:  # chat
-            result = self._analyze_chat(query, detail_level, custom_prompt, history, search_queries, scope)
+            result = self._analyze_chat(query, detail_level, custom_prompt, history, search_queries, scope,
+                                        retrieval_overrides=options.get("retrieval_overrides"))
         
         # Enrichir le résultat
         processing_time = int((time.time() - start_time) * 1000)
@@ -326,10 +327,10 @@ class DocumentAnalyzer:
             }
         }
     
-    def _analyze_chat(self, query: str, detail_level: str, custom_prompt: str = None, history: list = None, search_queries: list = None, scope: Dict = None) -> Dict:
+    def _analyze_chat(self, query: str, detail_level: str, custom_prompt: str = None, history: list = None, search_queries: list = None, scope: Dict = None, retrieval_overrides: Dict = None) -> Dict:
         """
         Mode chat: Question générale avec contexte RAG
-        
+
         Args:
             query: Question utilisateur (pour le prompt LLM)
             detail_level: Niveau de détail
@@ -338,30 +339,52 @@ class DocumentAnalyzer:
             search_queries: Liste de requêtes pour recherche multi-query (optionnel)
             scope: Filtres optionnels, dont metadata_filters pour cibler
                 les champs YAML front matter (editor, client, severity, ...)
+            retrieval_overrides: Surcharges ponctuelles de l'entonnoir de
+                retrieval pour CET appel uniquement (mode recherche
+                approfondie du pipeline query2). Clés reconnues :
+                search_top_k (sortie de fusion RRF), fusion_top_k (pool
+                soumis au reranker), rerank_top_n (passages conservés),
+                bm25_top_k / dense_top_k (pools bruts). Toute clé absente
+                retombe sur le réglage d'instance — le comportement par
+                défaut est strictement inchangé.
         """
         limits = self.LIMITS[detail_level]
         metadata_filters = self._extract_metadata_filters(scope)
-        
+
+        ov = retrieval_overrides or {}
+        search_top_k = ov.get("search_top_k") or limits["max_total_chunks"]
+        fusion_k = ov.get("fusion_top_k") or self.fusion_top_k
+        top_n = ov.get("rerank_top_n") or self.rerank_top_n
+        bm25_k = ov.get("bm25_top_k")
+        dense_k = ov.get("dense_top_k")
+
         # Recherche pour contexte (multi-query si disponible)
         if search_queries and len(search_queries) > 1 and hasattr(self.hybrid_search, 'search_multi'):
             logger.info(f"🔄 Multi-query search avec {len(search_queries)} variantes")
             search_results = self.hybrid_search.search_multi(
                 search_queries,
-                top_k=limits["max_total_chunks"],
-                filters=metadata_filters
+                top_k=search_top_k,
+                filters=metadata_filters,
+                bm25_top_k=bm25_k,
+                dense_top_k=dense_k
             )
         else:
             search_results = self.hybrid_search.search(
                 query,
-                top_k=limits["max_total_chunks"],
-                filters=metadata_filters
+                top_k=search_top_k,
+                filters=metadata_filters,
+                bm25_top_k=bm25_k,
+                dense_top_k=dense_k
             )
-        
+
         if self.reranker and search_results:
-            search_results = self.reranker.rerank(query, search_results[:self.fusion_top_k])[:self.rerank_top_n]
-        
+            # top_n passé explicitement : rerank() tronque sinon à son
+            # top_n interne (config d'instance), ce qui plafonnerait le
+            # mode deep malgré la surcharge de rerank_top_n.
+            search_results = self.reranker.rerank(query, search_results[:fusion_k], top_n=top_n)
+
         # Construire le contexte
-        context = self._build_context(search_results)
+        context = self._build_context(search_results, top_n=top_n)
         
         # DEBUG: Log de la query passée au LLM
         logger.info(f"DEBUG ANALYZER - Passing query to LLM: '{query}' (len={len(query)})")
@@ -613,13 +636,21 @@ Résumé:"""
             return f"[Source: {nom}, page {debut}]"
         return f"[Source: {nom}, pages {debut} à {fin}]"
 
-    def _build_context(self, chunks: List[Dict]) -> str:
-        """Construit le contexte à partir des chunks"""
+    def _build_context(self, chunks: List[Dict], top_n: int = None) -> str:
+        """Construit le contexte à partir des chunks.
+
+        top_n : plafond de passages injectés (défaut : rerank_top_n de
+        l'instance). Passé explicitement par le mode deep de query2, dont
+        le top_n élargi excède le réglage d'instance.
+        """
         if not chunks:
             return ""
 
+        if top_n is None:
+            top_n = self.rerank_top_n
+
         context_parts = []
-        for chunk in chunks[:self.rerank_top_n]:
+        for chunk in chunks[:top_n]:
             text = chunk.get("text", "")
             context_parts.append(
                 f"{self._etiquette_source(chunk)}\n{text}")

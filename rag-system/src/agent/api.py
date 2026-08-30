@@ -778,15 +778,23 @@ async def iterative_query(request: QueryRequest):
     """
     Pipeline iteratif query2.
 
-    Le contrat accepte query, index_name, top_k, custom_prompt et history.
-    deep_search est ignore.
+    Le contrat accepte query, index_name, top_k, custom_prompt, history
+    et deep_search.
 
     Apres la recherche classique, une analyse de couverture (1 appel LLM
     sur les passages complets) determine si les passages suffisent. Sinon,
     une seconde recherche ciblee (requetes proposees par l'analyse,
     vocabulaire metier) complete les passages avant la generation finale.
 
-    La reponse inclut une cle "iterative" tracant la couverture.
+    deep_search=true active le profil « recherche approfondie » :
+    meme structure fixe en 4 etapes, mais entonnoir de retrieval elargi
+    (section query2.deep de settings.yaml : pools BM25/dense, fusion,
+    top_n reranking, passages lus par le juge, quota des requetes
+    ciblees) — plus de passages remontes au prix de bruit et de latence.
+    deep_search=false reproduit strictement le pipeline courant.
+
+    La reponse inclut une cle "iterative" tracant la couverture et le
+    mode effectif.
     """
     try:
         history_dicts = None
@@ -808,6 +816,7 @@ async def iterative_query(request: QueryRequest):
             custom_prompt=request.custom_prompt,
             history=history_dicts,
             max_rounds=1,
+            deep=bool(request.deep_search),
         )
         elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -829,7 +838,7 @@ async def iterative_query(request: QueryRequest):
             "response": result.get("response", ""),
             "sources": result.get("sources", []),
             "passages": passages,
-            "mode": "chat_iteratif_v2",
+            "mode": "chat_iteratif_v2_deep" if request.deep_search else "chat_iteratif_v2",
             "index_name": _resolve_index_name(request.index_name),
             "iterative": result.get("iterative", {}),
             "processing_time_ms": elapsed_ms,

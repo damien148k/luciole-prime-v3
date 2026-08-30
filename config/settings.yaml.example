@@ -217,3 +217,20 @@ query2:
   # Inventaire des titres du corpus dans le prompt de couverture :
   # un tome pertinent absent des passages force un verdict PARTIEL.
   catalogue_couverture: true
+  # Profil « recherche approfondie » : appliqué quand la requête porte
+  # deep_search=true (toggle UI existant). Même structure fixe en 4
+  # étapes que le mode standard, mais entonnoir de retrieval élargi —
+  # plus de passages remontés au prix de bruit et de latence. Les
+  # valeurs ci-dessous sont les défauts du code : cette section ne sert
+  # qu'à les surcharger. Chaque clé absente retombe sur son défaut.
+  # Budget contexte : 30 passages complets en génération ~ 15-20k
+  # tokens — vérifier la fenêtre du backend (num_ctx sous Ollama).
+  deep:
+    bm25_top_k: 80              # pool brut BM25 par recherche (standard : retrieval.bm25_top_k, 40)
+    dense_top_k: 80             # pool brut dense par recherche (standard : 40)
+    search_top_k: 200           # sortie de fusion RRF (standard : 100)
+    fusion_top_k: 60            # pool soumis au reranker (standard : 30)
+    rerank_top_n: 30            # passages conservés pour le LLM (standard : 15)
+    coverage_max_passages: 20   # passages lus par le juge de couverture (standard : 12)
+    coverage_max_queries: 4     # requêtes ciblées max (standard : 3)
+    quota_par_requete: 6        # places garanties par requête ciblée (standard : 5)
