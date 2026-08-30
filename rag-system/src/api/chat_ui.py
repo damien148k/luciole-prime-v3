@@ -93,7 +93,11 @@ class ChatRequest(BaseModel):
     index_name: Optional[str] = None
     top_k: int = 20
     custom_prompt: Optional[str] = None  # Prompt personnalisé optionnel
-    deep_search: bool = False  # Recherche approfondie (double recherche avec/sans historique)
+    # Recherche approfondie : profil elargi du pipeline iteratif
+    # (reglages query2.deep de settings.yaml, PR #48). Quand le toggle
+    # est actif, le front lance AUSSI une seconde passe deep, affichee
+    # repliee en « Pistes complementaires » sous la reponse standard.
+    deep_search: bool = False
     history: list[ChatMessage] = []  # Historique de conversation
 
 
@@ -597,6 +601,43 @@ body::after{
   font-size:.74rem;color:var(--gold);font-weight:500;
 }
 
+/* === Pistes complémentaires (recherche approfondie) === */
+.deep-block{
+  margin-top:20px;
+  border:1px solid var(--border);border-radius:12px;
+  background:rgba(17,26,54,0.35);overflow:hidden;
+}
+.deep-block summary{
+  display:flex;align-items:center;gap:8px;
+  padding:11px 16px;cursor:pointer;list-style:none;
+  font-size:.78rem;font-weight:600;color:var(--gold);
+  text-transform:uppercase;letter-spacing:1.5px;
+  transition:background .2s;user-select:none;
+}
+.deep-block summary::-webkit-details-marker{display:none}
+.deep-block summary:hover{background:var(--gold-glow-soft)}
+.deep-block summary svg{width:14px;height:14px;transition:transform .2s}
+.deep-block[open] summary svg.chevron{transform:rotate(90deg)}
+.deep-count{
+  font-weight:500;text-transform:none;letter-spacing:0;
+  color:var(--text-muted);font-size:.76rem;
+}
+.deep-status{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 16px;border-top:1px solid var(--border);
+  font-size:.85rem;color:var(--text-secondary);
+}
+.deep-body{padding:14px 16px 16px;border-top:1px solid var(--border)}
+.deep-note{font-size:.78rem;color:var(--text-muted);margin-bottom:12px}
+.deep-docs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.deep-doc-chip{
+  padding:4px 10px;background:var(--gold-glow-soft);
+  border:1px solid var(--border-strong);border-radius:999px;
+  font-size:.74rem;color:var(--gold);word-break:break-word;
+}
+.cite-static{cursor:default;opacity:.65}
+.cite-static:hover{background:var(--gold-glow-soft);color:var(--gold);transform:none}
+
 .meta-info{
   display:flex;align-items:center;gap:14px;
   margin-top:10px;font-size:.72rem;color:var(--text-muted);
@@ -1008,7 +1049,7 @@ body::after{
       <div class="toggle-row">
         <div class="toggle-info">
           <div class="toggle-name">Recherche approfondie</div>
-          <div class="toggle-desc">Multi-passes pour requêtes complexes</div>
+          <div class="toggle-desc">Ajoute sous la réponse les pistes du profil élargi (deux passages, plus lent)</div>
         </div>
         <div class="toggle" id="enableDeepSearch" onclick="this.classList.toggle('on')"></div>
       </div>
@@ -1135,12 +1176,17 @@ function showToast(msg){
 }
 
 // Convertit un texte de réponse en HTML : transforme [n] en <span class="cite">n</span> et garde les sauts de ligne
-function renderAnswerContent(text){
+function renderAnswerContent(text,cliquables=true){
   if(!text) return '';
   let html=escapeHtml(text);
-  // citations [n] ou [n,m] -> spans cliquables
+  // citations [n] ou [n,m] -> spans cliquables (renvoi vers la sidebar),
+  // ou statiques quand la numerotation ne correspond pas aux sources
+  // affichees : la reponse deep a ses propres passages, absents de la
+  // sidebar qui reste celle de la reponse principale.
   html=html.replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g,(m,nums)=>{
-    return nums.split(/\s*,\s*/).map(n=>`<span class="cite" onclick="highlightSource(${n})">${n}</span>`).join('');
+    return nums.split(/\s*,\s*/).map(n=>cliquables
+      ?`<span class="cite" onclick="highlightSource(${n})">${n}</span>`
+      :`<span class="cite cite-static">${n}</span>`).join('');
   });
   // paragraphes simples sur double retour à la ligne
   const parts=html.split(/\n\n+/);
@@ -1378,28 +1424,22 @@ async function askQuestion(question){
   const settings=getSettings();
 
   try{
-    const controller=new AbortController();
-    const timeoutId=setTimeout(()=>controller.abort(),1800000);
-    const response=await fetch(`${AGENT_URL}/query`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      signal:controller.signal,
-      body:JSON.stringify({
-        query:question,
-        index_name:indexName||null,
-        top_k:settings.topK,
-        custom_prompt:settings.customPrompt,
-        deep_search:settings.deepSearch,
-        history:conversationHistory.slice(0,-1)
-      })
-    });
-    clearTimeout(timeoutId);
-    const data=await response.json();
+    // La reponse principale reste TOUJOURS le profil standard : le
+    // toggle « Recherche approfondie » ne la remplace pas, il ajoute
+    // une seconde passe elargie affichee repliee en dessous.
+    const {ok,data}=await queryAgent({
+      query:question,
+      index_name:indexName||null,
+      top_k:settings.topK,
+      custom_prompt:settings.customPrompt,
+      deep_search:false,
+      history:conversationHistory.slice(0,-1)
+    },1800000);
 
     const t=document.getElementById('thinkingIndicator');
     if(t) t.remove();
 
-    if(response.ok && data.response){
+    if(ok && data.response){
       addToHistory('assistant',data.response);
       const sources=data.sources||[];
       const passages=data.passages||[];
@@ -1416,6 +1456,9 @@ async function askQuestion(question){
       fillSidebar(sources,passages);
       if(passages.length>0) openSidebar();
       scrollToBottom();
+      // Seconde passe elargie, lancee sans etre attendue : l'utilisateur
+      // lit la reponse standard pendant qu'elle se termine.
+      if(settings.deepSearch) lancerPistesProfondes(question,indexName,settings,answerBlock,passages);
     } else if(data.error){
       conv.appendChild(buildErrorBlock(typeof data.error==='string'?data.error:JSON.stringify(data.error)));
     } else if(data.detail){
@@ -1440,6 +1483,88 @@ function buildErrorBlock(msg){
   block.className='answer-block';
   block.innerHTML=`<div class="answer-label" style="color:var(--error)">Erreur</div><div class="answer-content"><p style="color:var(--error)">${escapeHtml(msg)}</p></div>`;
   return block;
+}
+
+// Appel unique au proxy /api/query (qui relaie vers /api/query2).
+async function queryAgent(payload,timeoutMs){
+  const controller=new AbortController();
+  const timeoutId=setTimeout(()=>controller.abort(),timeoutMs);
+  try{
+    const response=await fetch(`${AGENT_URL}/query`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      signal:controller.signal,
+      body:JSON.stringify(payload)
+    });
+    return {ok:response.ok,data:await response.json()};
+  }finally{
+    clearTimeout(timeoutId);
+  }
+}
+
+// Seconde passe « recherche approfondie » : meme question, meme
+// historique, profil elargi (query2.deep). Le resultat s'affiche replie
+// sous la reponse standard, jamais a sa place : la fusion est
+// hierarchique, la reponse principale reste celle du profil eprouve.
+// Les documents que seule la passe elargie a fait remonter sont mis en
+// evidence — c'est la valeur ajoutee mesurable du mode deep.
+async function lancerPistesProfondes(question,indexName,settings,answerBlock,mainPassages){
+  const deep=document.createElement('details');
+  deep.className='deep-block';
+  deep.open=true; // la progression doit etre visible pendant le calcul
+  deep.innerHTML=`
+    <summary>
+      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      Pistes complémentaires
+      <span class="deep-count"></span>
+    </summary>
+    <div class="deep-status">
+      <div class="thinking-dots"><span></span><span></span><span></span></div>
+      Recherche approfondie en cours — l'entonnoir élargi est analysé…
+    </div>`;
+  const section=answerBlock.querySelector('.answer-section');
+  (section||answerBlock).appendChild(deep);
+  scrollToBottom();
+  try{
+    // Meme contexte que la passe standard : l'historique tel qu'il etait
+    // avant la question (la reponse principale, deja empilee, est exclue).
+    const {ok,data}=await queryAgent({
+      query:question,
+      index_name:indexName||null,
+      top_k:settings.topK,
+      custom_prompt:settings.customPrompt,
+      deep_search:true,
+      history:conversationHistory.slice(0,-2)
+    },1800000);
+    if(!deep.isConnected) return; // conversation reinitialisee entre-temps
+    if(ok && data.response && !data.error){
+      const passages=data.passages||[];
+      const docsDeep=grouperParDocument(passages);
+      const nomsMain=new Set(grouperParDocument(mainPassages).map(d=>d.file_name));
+      const nouveaux=docsDeep.filter(d=>!nomsMain.has(d.file_name));
+      const dureeS=data.processing_time_ms?Math.round(data.processing_time_ms/100)/10:null;
+      deep.querySelector('.deep-count').textContent=nouveaux.length>0
+        ?`· ${nouveaux.length} nouveau${nouveaux.length>1?'x':''} document${nouveaux.length>1?'s':''}`:'';
+      const chips=nouveaux.length>0
+        ?`<div class="deep-note">Documents que seule la recherche élargie a fait remonter :</div>
+          <div class="deep-docs">${nouveaux.map(d=>`<span class="deep-doc-chip">${escapeHtml(d.file_name)}</span>`).join('')}</div>`
+        :'';
+      deep.querySelector('.deep-status').outerHTML=`
+        <div class="deep-body">
+          <div class="deep-note">Réponse du profil élargi (query2.deep) — plus de passages lus, au prix d'un bruit possible. Citations non cliquables : leur numérotation renvoie aux passages de cette passe, distincts de la sidebar.</div>
+          ${chips}
+          <div class="answer-content">${renderAnswerContent(data.response,false)}</div>
+          ${dureeS!==null?`<div class="meta-info"><span>⏱ ${dureeS}s</span><span>${passages.length} passages</span></div>`:''}
+        </div>`;
+    } else {
+      const raison=data&&(data.error||data.detail)||'réponse inattendue';
+      deep.querySelector('.deep-status').textContent=
+        'La recherche approfondie a échoué ('+raison+') — la réponse principale reste valable.';
+    }
+  }catch(e){
+    if(deep.isConnected)
+      deep.querySelector('.deep-status').textContent='Recherche approfondie injoignable : '+(e.message||e);
+  }
 }
 
 // Regroupe les passages par document pour alimenter le panneau Sources.
