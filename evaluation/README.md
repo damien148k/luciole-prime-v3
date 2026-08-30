@@ -92,35 +92,42 @@ dans `settings.yaml`. Il etait auparavant plafonne en dur a quinze dans
 
 ## Repere en vigueur
 
-Beaumont Sud, 30 aout 2026 — premiere mesure a fenetre effective
-complete : 32768 tokens confirmes par sonde (api_format: ollama,
-Ollama 0.33.2, qwen2.5:14b-instruct-q4_K_M), verdict a trois etats,
-jeu de 15 remarques, pipeline avec PR #48 (deep_search) et #50.
+Beaumont Sud, 30 aout 2026, corpus complet (Tome 5 ingere) —
+premiere mesure a fenetre effective complete : 32768 tokens confirmes
+par sonde (api_format: ollama, Ollama 0.33.2, qwen2.5:14b-instruct-
+q4_K_M), verdict a trois etats, jeu de 15 remarques, pipeline avec
+PR #48 (deep_search) et #50.
 
-- standard : 0 esquive, 5 repond, 10 concede ; 11 COUVERT / 4 PARTIEL,
-  4 recherches B ; 23,6 min au total.
-- deep : 0 esquive, 6 repond, 9 concede ; 13 COUVERT / 2 PARTIEL,
-  2 recherches B ; 27,8 min (+18 %).
-- croisement : 3 ameliores (concede -> repond : beaumont-02, -04, -14),
-  2 degrades (repond -> concede : beaumont-01, -06). Les ameliores
-  gagnent un tome rendu (-02 gagne le tome 4, -14 le tome 1) — gain
-  de couverture reel. Les degrades ne perdent aucun tome : le modele
-  formule plus prudemment face a 30 passages (bruit accepte), ce que
-  le verdict compte concede.
+- standard : 0 esquive, 5 repond, 10 concede ; 13 COUVERT / 2 PARTIEL,
+  2 recherches B ; 23,3 min au total.
+- deep : 0 esquive, 10 repond, 5 concede ; 11 COUVERT / 4 PARTIEL,
+  4 recherches B ; 29,8 min (+28 %).
+- croisement : 6 ameliores (concede -> repond : beaumont-02, -04, -05,
+  -09, -13, -15), 1 degrade (repond -> concede : beaumont-11). Le
+  Tome 5 (Paysage et Patrimoine) est rendu sur 7 cas en deep contre
+  4 en standard — le profil elargi exploite mieux un corpus riche.
 - controle de plomberie : 0 cas avec moins de passages en deep.
+- vigilance : beaumont-03 et beaumont-15 ont une reference vide
+  (esquive legitime attendue par convention du jeu). Le 03 reste
+  concede dans les deux bras ; le 15 passe a repond en deep — a
+  relire humainement : si la reponse est reellement fondee sur des
+  passages du dossier, c'est l'annotation du jeu qu'il faut corriger,
+  pas le pipeline.
 
-Conclusion tiree ce jour : le profil deep est un mode d'exhaustivite
-a la demande (net +1 verdict, couverture meilleure, recherche B
-divisee par deux), pas un defaut — d'ou l'affichage fusionne de la
-PR #49 (standard en tete, pistes deep repliees dessous).
+Conclusion tiree ce jour : sur corpus complet, l'ecart se creuse en
+faveur du deep (net +5 verdicts) — le profil elargi est un mode
+d'exhaustivite a la demande, d'autant plus utile que le corpus est
+riche. L'affichage fusionne (PR #49) reste la bonne ergonomie :
+standard en tete, pistes deep repliees dessous.
 
-Reserve corpus : le Tome 5 (Paysage et Patrimoine, > 500 Mo) etait
-refuse par le watcher (limite WATCHER_MAX_FILE_SIZE_MB) et donc
-absent des index pendant cette mesure — les remarques paysageres
-ont ete jugees sur sources secondaires (RNT, Tome 1). Apres releve
-de la limite et ingestion du tome, une nouvelle mesure s'impose au
-moins sur ces remarques ; toute modification du corpus invalide le
-repere comme tout changement de fenetre.
+Note historique : une mesure le meme jour sur corpus incomplet (Tome
+5, 846 Mo, refuse par la limite WATCHER_MAX_FILE_SIZE_MB du watcher)
+donnait deep 6 repond et un croisement +3/-2. Apres releve de la
+limite et ingestion du tome, le deep est passe a 10 repond :
+l'exhaustivite du corpus compte autant que le pipeline. La mesure
+intermediaire est conservee sur l'instance mrae dans
+campagne_query2_deep.jsonl (run sans suffixe) — label du repere :
+query2_deep_corpus_complet.
 
 L'ancien repere du 6 aout 2026 reste retire : trois defauts cumules,
 tous decouverts le 7 aout, le rendaient inexploitable.
