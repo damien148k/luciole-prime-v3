@@ -25,6 +25,9 @@ llm:
   provider: tensorrt-llm
   model: qwen3-30b-a3b-instruct
   base_url: http://tensorrt-llm:8000
+  # Chemin d'appel HTTP. "openai" = endpoint compatible /v1/chat/completions
+  # (TRT-LLM, LM Studio, Ollama le servent aussi). "ollama" = API native
+  # /api/chat d'Ollama — le seul chemin qui transmet num_ctx a la requete.
   api_format: openai
   # Determinisme. temperature 0 et seed fixe sont ce qui rend une campagne
   # comparable a la suivante. Mesure du 6 aout 2026, deux passages du meme
@@ -48,6 +51,11 @@ llm:
   #   provider: ollama
   #   model: qwen2.5:14b-instruct-q4_K_M
   #   base_url: http://ollama:11434
+  #   api_format: ollama   # transmet num_ctx a chaque requete (API native)
+  #   num_ctx: 32768       # fenêtre reelle; sans api_format: ollama elle
+  #                        # reste celle du serveur (defaut 2048/4096, ou
+  #                        # OLLAMA_CONTEXT_LENGTH) — verifier avec
+  #                        # evaluation/sonde_contexte.py
   #   timeout: 1800
   #
   # LM Studio (poste de dev / local) :

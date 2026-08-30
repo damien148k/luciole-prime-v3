@@ -107,3 +107,15 @@ tous decouverts le 7 aout, le rendent inexploitable.
 Une nouvelle mesure est a etablir sur le pipeline corrige. Tant qu'elle
 n'est pas faite, cette section reste vide : mieux vaut aucun repere qu'un
 repere faux.
+
+Le 30 aout 2026, la sonde a retrouve le meme defaut sur l'instance mrae
+reinstallee : 2048 tokens effectifs malgre `num_ctx: 16384`. Depuis,
+`api_format: ollama` (cle qui existait dans settings.yaml sans etre lue)
+fait appel a l'API native `/api/chat`, qui transmet `options.num_ctx` a
+chaque requete : la fenetre redevient pilotable depuis settings.yaml,
+instance par instance, sans toucher au serveur. `sonde_num_ctx_natif.py`
+prouve que la version du serveur honore ce pilotage avant de s'y fier ;
+`sonde_contexte.py` reste la mesure de la fenetre effective, quel que
+soit le chemin d'appel. Toute mesure de reference posterieure a un
+changement de fenetre doit etre refaite : les passages visibles par le
+modele changent, donc les reponses.
