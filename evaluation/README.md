@@ -114,6 +114,14 @@ a la demande (net +1 verdict, couverture meilleure, recherche B
 divisee par deux), pas un defaut — d'ou l'affichage fusionne de la
 PR #49 (standard en tete, pistes deep repliees dessous).
 
+Reserve corpus : le Tome 5 (Paysage et Patrimoine, > 500 Mo) etait
+refuse par le watcher (limite WATCHER_MAX_FILE_SIZE_MB) et donc
+absent des index pendant cette mesure — les remarques paysageres
+ont ete jugees sur sources secondaires (RNT, Tome 1). Apres releve
+de la limite et ingestion du tome, une nouvelle mesure s'impose au
+moins sur ces remarques ; toute modification du corpus invalide le
+repere comme tout changement de fenetre.
+
 L'ancien repere du 6 aout 2026 reste retire : trois defauts cumules,
 tous decouverts le 7 aout, le rendaient inexploitable.
 
