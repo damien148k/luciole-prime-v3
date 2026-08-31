@@ -7,6 +7,23 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Installations : `api_format: ollama` et `num_ctx: 32768` par défaut**
+  (INSTALL.ps1, INSTALL_OFFLINE.ps1, install.sh, install_offline.sh).
+  Les scripts généraient des instances avec `api_format: openai` et
+  `num_ctx: 16384` : la porte `/v1/chat/completions` d'Ollama plafonne
+  silencieusement les prompts à 16384 tokens même avec
+  `OLLAMA_CONTEXT_LENGTH=32768`, et `num_ctx` n'y est pas transmis à
+  la requête — chaque nouvelle instance devait être corrigée à la main
+  (constaté sur trois déploiements successifs, 30-31 août 2026).
+  Désormais généré : `api_format: ollama` (porte native `/api/chat`,
+  qui honore `options.num_ctx` par requête) et `num_ctx: 32768`,
+  avec une note sur le repli `openai` réservé aux autres backends
+  (TRT-LLM, LM Studio). Le Modelfile du modèle RAGAS
+  `qwen2.5-14b-ragas` passe également de `num_ctx 16384` à `32768`
+  dans INSTALL.ps1 et INSTALL_OFFLINE.ps1.
+
 ### Added
 
 - **Catalogue de titres dans l'analyse de couverture query2 (v2.9)** :

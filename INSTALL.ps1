@@ -318,7 +318,11 @@ llm:
   provider: ollama
   model: qwen2.5:14b-instruct-q4_K_M
   base_url: http://ollama:11434
-  api_format: openai
+  # "ollama" = API native /api/chat, seul chemin qui transmet num_ctx a la
+  # requete : la porte /v1 (openai) plafonne silencieusement a 16384 meme
+  # avec OLLAMA_CONTEXT_LENGTH=32768. Ne remettre "openai" que si le backend
+  # change (TRT-LLM, LM Studio) ; sous Ollama, garder "ollama".
+  api_format: ollama
   # Determinisme. temperature 0 et seed fixe rendent une campagne comparable
   # a la suivante : mesure du 6 aout 2026, dix-neuf reponses identiques au
   # caractere sur vingt entre deux passages du meme bras, contre sept sur
@@ -326,7 +330,7 @@ llm:
   temperature: 0
   seed: 42
   max_tokens: 4096
-  num_ctx: 16384
+  num_ctx: 32768
   timeout: 1800
 
 "@
@@ -581,8 +585,8 @@ if ($ollamaList2 -match "nomic-embed-text") {
 if ($ollamaList2 -match "qwen2.5-14b-ragas") {
     Write-OK "Modele RAGAS qwen2.5-14b-ragas deja present"
 } else {
-    Write-Host "  Creation du modele qwen2.5-14b-ragas (Modelfile num_ctx=16384)..." -ForegroundColor Yellow
-    docker exec $ollamaContainer sh -c "echo 'FROM qwen2.5:14b-instruct-q4_K_M' > /tmp/Modelfile && echo 'PARAMETER num_ctx 16384' >> /tmp/Modelfile && echo 'PARAMETER temperature 0' >> /tmp/Modelfile && ollama create qwen2.5-14b-ragas -f /tmp/Modelfile"
+    Write-Host "  Creation du modele qwen2.5-14b-ragas (Modelfile num_ctx=32768)..." -ForegroundColor Yellow
+    docker exec $ollamaContainer sh -c "echo 'FROM qwen2.5:14b-instruct-q4_K_M' > /tmp/Modelfile && echo 'PARAMETER num_ctx 32768' >> /tmp/Modelfile && echo 'PARAMETER temperature 0' >> /tmp/Modelfile && ollama create qwen2.5-14b-ragas -f /tmp/Modelfile"
 }
 
 # ============================================================================
