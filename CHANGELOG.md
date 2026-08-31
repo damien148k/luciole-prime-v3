@@ -9,6 +9,14 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 ### Changed
 
+- **`OLLAMA_CONTEXT_LENGTH=32768` dans le compose d'instance**
+  (`docker-compose.legacy.yml`, services `ollama` et `ollama-cpu`) :
+  sans cette variable, Ollama sert au mieux 16384 tokens par requête et
+  la porte `/v1` y plafonne même avec un `num_ctx` supérieur. Aligné sur
+  le `llm.num_ctx: 32768` désormais généré à l'installation (entrée
+  suivante). Les instances existantes conservent leur compose — le
+  réglage s'applique aux nouvelles générations seulement.
+
 - **Installations : `api_format: ollama` et `num_ctx: 32768` par défaut**
   (INSTALL.ps1, INSTALL_OFFLINE.ps1, install.sh, install_offline.sh).
   Les scripts généraient des instances avec `api_format: openai` et

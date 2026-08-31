@@ -31,6 +31,10 @@ services:
     - OLLAMA_NUM_PARALLEL=1
     - OLLAMA_MAX_LOADED_MODELS=1
     - OLLAMA_KEEP_ALIVE=60m
+    # Fenetre de contexte serveur : sans elle, Ollama sert au mieux 16384
+    # tokens par requete et la porte /v1 y plafonne meme avec un num_ctx
+    # superieur. Aligne sur llm.num_ctx: 32768 genere a l'installation.
+    - OLLAMA_CONTEXT_LENGTH=32768
     profiles:
     - gpu
     deploy:
@@ -73,6 +77,10 @@ services:
     - OLLAMA_NUM_PARALLEL=1
     - OLLAMA_MAX_LOADED_MODELS=1
     - OLLAMA_KEEP_ALIVE=60m
+    # Fenetre de contexte serveur : sans elle, Ollama sert au mieux 16384
+    # tokens par requete et la porte /v1 y plafonne meme avec un num_ctx
+    # superieur. Aligne sur llm.num_ctx: 32768 genere a l'installation.
+    - OLLAMA_CONTEXT_LENGTH=32768
     profiles:
     - cpu
     logging:
