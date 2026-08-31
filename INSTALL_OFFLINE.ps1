@@ -393,7 +393,7 @@ llm:
   provider: ollama
   model: qwen2.5:14b-instruct-q4_K_M
   base_url: http://ollama:11434
-  api_format: openai
+  api_format: ollama
   # Determinisme. temperature 0 et seed fixe rendent une campagne comparable
   # a la suivante : mesure du 6 aout 2026, dix-neuf reponses identiques au
   # caractere sur vingt entre deux passages du meme bras, contre sept sur
@@ -401,7 +401,7 @@ llm:
   temperature: 0
   seed: 42
   max_tokens: 4096
-  num_ctx: 16384
+  num_ctx: 32768
   timeout: 1800
 
 "@
@@ -670,8 +670,8 @@ if ($ollamaList -match "nomic-embed-text") {
 if ($ollamaList -match "qwen2.5-14b-ragas") {
     Write-OK "Modele RAGAS qwen2.5-14b-ragas deja present"
 } else {
-    Write-Host "  Creation du modele qwen2.5-14b-ragas (Modelfile num_ctx=16384)..." -ForegroundColor Yellow
-    docker exec $ollamaContainer sh -c "echo 'FROM qwen2.5:14b-instruct-q4_K_M' > /tmp/Modelfile && echo 'PARAMETER num_ctx 16384' >> /tmp/Modelfile && echo 'PARAMETER temperature 0' >> /tmp/Modelfile && ollama create qwen2.5-14b-ragas -f /tmp/Modelfile"
+    Write-Host "  Creation du modele qwen2.5-14b-ragas (Modelfile num_ctx=32768)..." -ForegroundColor Yellow
+    docker exec $ollamaContainer sh -c "echo 'FROM qwen2.5:14b-instruct-q4_K_M' > /tmp/Modelfile && echo 'PARAMETER num_ctx 32768' >> /tmp/Modelfile && echo 'PARAMETER temperature 0' >> /tmp/Modelfile && ollama create qwen2.5-14b-ragas -f /tmp/Modelfile"
     if ($LASTEXITCODE -eq 0) {
         Write-OK "Modele qwen2.5-14b-ragas cree avec succes"
     } else {
