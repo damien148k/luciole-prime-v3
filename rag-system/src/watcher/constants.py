@@ -62,7 +62,7 @@ DEFAULT_EXCLUDED_DIRS: frozenset[str] = frozenset({
 # Limites opérationnelles
 # ─────────────────────────────────────────────────────────────────────────────
 
-MAX_FILE_SIZE_MB: int = 500          # Taille maximale d'un fichier à indexer (Mo)
+MAX_FILE_SIZE_MB: int = 9999         # Taille maximale d'un fichier à indexer (Mo)
 MAX_FILE_SIZE_BYTES: int = MAX_FILE_SIZE_MB * 1024 * 1024
 
 MAX_QUEUE_DEPTH: int = 50_000        # Alerte si la queue dépasse ce seuil

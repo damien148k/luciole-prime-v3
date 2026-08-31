@@ -233,7 +233,7 @@ class WatcherConfig(BaseModel):
     allowed_extensions: list[str] = []      # Si vide, utilise SUPPORTED_DOCUMENT_EXTENSIONS
     excluded_dirs: list[str] = []
     excluded_extensions: list[str] = []
-    max_file_size_mb: int = 500
+    max_file_size_mb: int = 9999
 
     # Retry
     retry_max_attempts: int = 3

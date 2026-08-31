@@ -35,6 +35,16 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
   et le carnet de photomontages (874 Mo) n'étaient jamais ingérés.
   Positionner la variable dans le `.env` de l'instance pour l'ajuster.
 
+- **Taille maximale d'ingestion portée à 9999 Mo par défaut** : le
+  défaut de 500 Mo rejetait silencieusement les très gros livrables —
+  mesuré le 30 août 2026 sur l'instance MRAe, où le Tome 5 « Paysage
+  et Patrimoine » (846 Mo) exigeait un override local. Alignement des
+  défauts sur cet override validé en campagne corpus complet :
+  `.env.template`, fallbacks des deux compose, `settings.yaml.example`,
+  défauts Python (`watcher/models.py`, `watcher/constants.py`).
+  Toujours surchargeable par instance via `WATCHER_MAX_FILE_SIZE_MB`
+  dans le `.env`.
+
 ### Fixed
 
 - **Règle d'inventaire désormais déterministe (query2 v2.10)** : pour

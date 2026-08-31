@@ -201,7 +201,7 @@ watcher:
   excluded_extensions:
     - .tmp
     - .temp
-  max_file_size_mb: 500
+  max_file_size_mb: 9999
   retry_max_attempts: 3
   retry_backoff_base: 60.0
   db_path: /app/backups/watcher/watcher.db
