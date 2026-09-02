@@ -242,3 +242,7 @@ query2:
     coverage_max_passages: 20   # passages lus par le juge de couverture (standard : 12)
     coverage_max_queries: 4     # requêtes ciblées max (standard : 3)
     quota_par_requete: 6        # places garanties par requête ciblée (standard : 5)
+    coverage_passage_chars: 1200  # caractères lus par passage au juge de
+                                  # couverture (standard : 1200). Avec des
+                                  # chunks >= 1024 tokens (~3800 car.),
+                                  # porter à ~2400 avec coverage_max_passages: 16.

@@ -119,11 +119,19 @@ DEEP_DEFAULTS = {
     "coverage_max_passages": 20, # passages lus par le juge de couverture (standard : 12)
     "coverage_max_queries": 4,   # requêtes ciblées max (standard : 3)
     "quota_par_requete": 6,      # places garanties par requête ciblée (standard : 5)
+    "coverage_passage_chars": COVERAGE_PASSAGE_CHARS,
+                                 # caractères lus par passage au juge de
+                                 # couverture (standard : COVERAGE_PASSAGE_CHARS)
 }
 # Budget contexte à surveiller côté backend LLM : 20 passages x 1200
 # caractères ~ 8k tokens pour le juge, et 30 passages complets pour la
 # génération (~15-20k tokens selon le chunker) — le mode deep suppose
 # une fenêtre >= 32k (GX10/TensorRT-LLM ; vérifier num_ctx sous Ollama).
+# Avec des chunks >= ~1024 tokens (~3800 car.), le juge ne lit plus que
+# le tiers de chaque passage à 1200 car. : porter coverage_passage_chars
+# à ~2400 en réduisant coverage_max_passages d'autant (16 x 2400 car.
+# ~ 11k tokens), et baisser rerank_top_n (~20) pour que les passages
+# complets de la génération restent dans la fenêtre.
 
 # Inventaire des titres du corpus dans le prompt de couverture (v2.9).
 # Réglable à chaud via settings.yaml (section query2) ; la variable
@@ -631,6 +639,7 @@ class IterativePipeline:
             "coverage_max_passages": COVERAGE_MAX_PASSAGES,
             "coverage_max_queries": COVERAGE_MAX_QUERIES,
             "quota_par_requete": QUOTA_PAR_REQUETE,
+            "coverage_passage_chars": COVERAGE_PASSAGE_CHARS,
         }
 
     def _catalogue_titres(self) -> List[str]:
@@ -665,13 +674,14 @@ class IterativePipeline:
         p = params or self._parametres(deep=False)
         max_passages = p["coverage_max_passages"]
         max_queries = p["coverage_max_queries"]
+        passage_chars = p["coverage_passage_chars"]
         titres = self._catalogue_titres()
         defaut = {"verdict": "COUVERT", "manques": [], "requetes": [],
                   "catalogue_titres": len(titres)}
 
         passages = []
         for chunk in search_results[:max_passages]:
-            texte = _texte_passage(chunk)[:COVERAGE_PASSAGE_CHARS]
+            texte = _texte_passage(chunk)[:passage_chars]
             if texte:
                 passages.append(f"[{_etiquette_passage(chunk)}]\n{texte}")
 
