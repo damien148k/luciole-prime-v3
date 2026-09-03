@@ -21,6 +21,7 @@ import yaml
 import httpx
 
 from src.agent.iterative import IterativePipeline
+from src.generation.posttraitement import Reformulateur
 
 from src.generation.llm_backend import (
     detect_llm_backend,
@@ -106,6 +107,14 @@ class QueryRequest(BaseModel):
     custom_prompt: Optional[str] = Field(default=None, description="Prompt personnalisé optionnel")
     deep_search: bool = Field(default=False, description="Recherche approfondie (double recherche avec/sans historique)")
     history: List[ChatMessage] = Field(default=[], description="Historique de conversation")
+    reformuler: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Post-traitement de la réponse : résolution déterministe des "
+            "calculs {{calc: ...}} puis reformulation par consigne de style. "
+            "None = réglage d'instance (reformulation.enabled dans settings.yaml)"
+        )
+    )
 
 
 
@@ -279,6 +288,23 @@ def _get_reranker():
                     "(mode degrade explicite), positionner RERANKER_OPTIONAL=true."
                 ) from e
     return _reranker
+
+
+def _consigne_calculs() -> str:
+    """Consigne d'écriture des marqueurs {{calc: ...}} (clé calcul_consigne
+    de prompts.yaml).
+
+    Injectée dans le prompt système de la génération quand la
+    reformulation est active : c'est elle qui apprend au modèle à ne
+    jamais calculer lui-même. Chaîne vide si la clé est absente — la
+    génération reste alors strictement inchangée.
+    """
+    try:
+        from src.config_loader import load_prompts
+        return (load_prompts().get_calcul_consigne() or "").strip()
+    except Exception as e:
+        logger.warning(f"Consigne calcul illisible ({e}), génération sans consigne")
+        return ""
 
 
 def _get_llm_generator():
@@ -804,20 +830,59 @@ async def iterative_query(request: QueryRequest):
         analyzer = get_analyzer(index_name=_resolve_index_name(request.index_name))
         # Reglages query2 relus a chaque requete : un reload-config a
         # chaud (UI feedback) les applique sans redemarrage.
+        config = _get_config()
         pipeline = IterativePipeline(
             analyzer,
-            query2_config=_get_config().get("query2", {}),
+            query2_config=config.get("query2", {}),
         )
+
+        # Post-traitement (calculs + reformulation) : le parametre de
+        # requete `reformuler` l'emporte sur le reglage d'instance ; a
+        # defaut, la section reformulation de settings.yaml gouverne
+        # (defaut : inactif, comportement historique strict).
+        reform_config = config.get("reformulation", {}) or {}
+        reformulation_active = (
+            bool(request.reformuler)
+            if request.reformuler is not None
+            else bool(reform_config.get("enabled", False))
+        )
+
+        # La consigne calcul est jointe au custom_prompt : elle atteint
+        # ainsi la generation des DEUX branches du pipeline (recherche A
+        # classique et recherche B a quota), qui lisent toutes deux
+        # options["custom_prompt"].
+        custom_prompt = request.custom_prompt
+        if reformulation_active:
+            consigne_calc = _consigne_calculs()
+            if consigne_calc:
+                custom_prompt = (
+                    f"{custom_prompt}\n\n{consigne_calc}"
+                    if custom_prompt else consigne_calc
+                )
 
         start_time = time.time()
         result = pipeline.run(
             query=request.query,
             top_k=request.top_k,
-            custom_prompt=request.custom_prompt,
+            custom_prompt=custom_prompt,
             history=history_dicts,
             max_rounds=1,
             deep=bool(request.deep_search),
         )
+
+        # Post-traitement effectif : resolution deterministe des calculs
+        # puis, si une consigne de style est en place, reformulation.
+        # Repli garanti sur la reponse d'origine en cas de defaillance —
+        # jamais pire que sans (philosophie du pipeline iteratif).
+        reformulation_trace = None
+        reponse_brute = None
+        if reformulation_active:
+            reponse_brute = result.get("response", "")
+            reformulateur = Reformulateur(analyzer.llm_generator, reform_config)
+            result["response"], reformulation_trace = reformulateur.traiter(
+                reponse_brute
+            )
+
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         search_results_raw = result.get("search_results", [])
@@ -843,6 +908,13 @@ async def iterative_query(request: QueryRequest):
             "iterative": result.get("iterative", {}),
             "processing_time_ms": elapsed_ms,
         }
+
+        if reformulation_active:
+            # Reponse brute (avant calculs/reformulation) et trace
+            # detaillee : comparaison A/B en campagne et audit des
+            # calculs effectivement evalues.
+            response_data["response_brute"] = reponse_brute
+            response_data["reformulation"] = reformulation_trace
 
         _log_query(
             question=request.query,

@@ -246,3 +246,31 @@ query2:
                                   # couverture (standard : 1200). Avec des
                                   # chunks >= 1024 tokens (~3800 car.),
                                   # porter à ~2400 avec coverage_max_passages: 16.
+
+# Post-traitement des réponses (route /api/query2 uniquement), en deux
+# étages appliqués après la génération :
+#   1. résolution DÉTERMINISTE des marqueurs {{calc: ...}} — Python
+#      évalue, jamais le LLM (src/generation/posttraitement.py) ;
+#   2. reformulation de la réponse par un second appel LLM, piloté par
+#      une consigne de style relue depuis son fichier À CHAQUE requête
+#      — éditable à chaud, un reload-config suffit.
+# Quand enabled=true, la consigne d'écriture des marqueurs (clé
+# calcul_consigne de prompts.yaml) est injectée dans le prompt système
+# de la génération. Toute défaillance replie sur la réponse d'origine.
+# Le paramètre `reformuler` du corps de requête /api/query2 l'emporte
+# sur enabled pour un essai ponctuel (curl, campagne).
+reformulation:
+  enabled: false
+  # Fichier de consigne de style. Seule la partie située APRÈS la
+  # première ligne « --- » est envoyée au modèle ; l'en-tête reste de
+  # la documentation. Relu à chaque requête.
+  fichier_prompt: config/prompts/reformulation.md
+  # recriture: false = seuls les calculs sont résolus, pas de second
+  # appel LLM — utile pour mesurer l'étage 1 seul, ou en attendant la
+  # consigne finale de l'équipe.
+  recriture: true
+  # Arrondi par défaut des résultats {{calc}} non entiers.
+  decimales: 1
+  # Garde anti-troncature : une reformulation plus courte que ce ratio
+  # de la longueur d'origine est écartée (repli sur l'originale).
+  longueur_min_ratio: 0.3

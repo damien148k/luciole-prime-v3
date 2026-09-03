@@ -40,6 +40,26 @@ rag_prompt: |
 
   Réponds maintenant :
 
+# Consigne injectée dans le prompt système quand la reformulation est
+# active (reformulation.enabled dans settings.yaml, route /api/query2).
+# Elle apprend au modèle à NE JAMAIS calculer lui-même : les expressions
+# sont écrites en marqueurs {{calc: ...}} et évaluées par Python de façon
+# déterministe après génération (src/generation/posttraitement.py).
+calcul_consigne: |
+  CALCULS CHIFFRÉS :
+  Quand la réponse exige une opération arithmétique (somme, différence,
+  produit, ratio, pourcentage, moyenne), n'écris JAMAIS le résultat
+  toi-même : écris à sa place le marqueur {{calc: expression}} en
+  reprenant les valeurs exactes des extraits. Un moteur de calcul
+  déterministe évaluera l'expression et insérera le résultat.
+  Syntaxe stricte : nombres avec point décimal et sans séparateur de
+  milliers (12400.5), opérateurs + - * / et parenthèses, fonctions
+  arrondi(x, n), pourcentage(partie, total), min, max, abs.
+  Exemple : « l'emprise représente {{calc: 12.4 / 388 * 100}} % de la
+  surface communale (Volet projet, p. 45) ».
+  Chaque valeur utilisée dans un marqueur doit provenir d'un extrait
+  cité dans la réponse — jamais d'une estimation.
+
 no_results_prompt: |
   Je n'ai pas trouvé de document correspondant à votre recherche.
 

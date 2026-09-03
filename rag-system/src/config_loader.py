@@ -103,6 +103,16 @@ class PromptsConfig:
         """
         return self.config.get('no_results_prompt', '')
     
+    def get_calcul_consigne(self) -> str:
+        """
+        Retourne la consigne de calcul (marqueurs {{calc: ...}}), injectée
+        dans le prompt système quand la reformulation est active.
+
+        Returns:
+            str: Consigne calcul, ou chaîne vide si absente
+        """
+        return self.config.get('calcul_consigne', '')
+
     def get_search_config(self) -> dict:
         """
         Retourne la configuration RAG (max_results, scores, weights, etc.).
@@ -176,6 +186,14 @@ class PromptsConfig:
                 '- Reformulez votre question avec des termes différents\n'
                 '- Vérifiez que les documents concernés ont été indexés\n'
                 '- Essayez une recherche plus générale'
+            ),
+            'calcul_consigne': (
+                'CALCULS CHIFFRÉS : quand la réponse exige une opération '
+                'arithmétique, n\'écris jamais le résultat toi-même : écris '
+                'le marqueur {{calc: expression}} avec les valeurs exactes '
+                'des extraits (point décimal, opérateurs + - * /, fonctions '
+                'arrondi(x, n), pourcentage(partie, total), min, max, abs). '
+                'Un moteur déterministe évaluera l\'expression.'
             ),
             'search_config': {
                 'max_results': 10,
