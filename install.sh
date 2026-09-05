@@ -388,6 +388,12 @@ LUCIOLE_IMAGE="luciole-gpu:latest"
 BCRYPT_HASH=""
 BCRYPT_HASH=$(LUCIOLE_PWD="$DEFAULT_PASSWORD" python3 -c "import bcrypt,os; print(bcrypt.hashpw(os.environ['LUCIOLE_PWD'].encode(), bcrypt.gensalt()).decode())" 2>/dev/null) || BCRYPT_HASH=""
 
+# NB : un hash bcrypt commence par "$2b$" (sans anti-quotation). Le motif de
+# comparaison doit echapper le "$" une seule fois (\$), pas deux (\\$) :
+# un double backslash exige un "$" litteralement precede d'un backslash, ce
+# qu'un vrai hash ne contient jamais. Avant ce correctif le test etait donc
+# toujours vrai et tout hash valide etait rejete -> l'etape 6/8 plantait
+# systematiquement (generation du mot de passe admin impossible).
 # Hash bcrypt : essai 2 - Container Docker
 if [ -z "$BCRYPT_HASH" ] || [[ "$BCRYPT_HASH" != \$2b\$* ]]; then
     echo "  Python3/bcrypt absent sur l'hote -- utilisation du container Docker..."
@@ -446,7 +452,24 @@ if echo "$OLLAMA_LIST" | grep -q "$MODEL_BASE"; then
 else
     echo "  Modele $MODEL non detecte localement."
     echo "  Telechargement via internet..."
-    docker exec "$OLLAMA_CONTAINER" ollama pull "$MODEL"
+    # Sans garde-fou, un echec du pull (proxy TLS, registre inaccessible,
+    # machine hors-ligne) fait planter le script via set -e a l'etape 7/8
+    # sans message exploitable. On degrade proprement : le reste de
+    # l'installation continue, le modele peut etre copie ensuite depuis une
+    # instance existante (voir docs/DEPLOIEMENT_INSTANCE.md, section
+    # « Cas d'un proxy d'entreprise ») puis ollama redemarre.
+    if docker exec "$OLLAMA_CONTAINER" ollama pull "$MODEL"; then
+        ok "Modele $MODEL telecharge"
+    else
+        warn "Echec ollama pull '$MODEL' (etape 7/8)"
+        warn "  Causes frequentes : proxy/antivirus interceptant le TLS"
+        warn "  (certificat inconnu), pas d'acces internet, registre indisponible."
+        warn "  Solution de contournement : copier le modele depuis une instance"
+        warn "  existante (docs/DEPLOIEMENT_INSTANCE.md, section proxy), puis :"
+        warn "    docker restart $OLLAMA_CONTAINER"
+        warn "  L'installation continue ; le chat restera indisponible tant que le"
+        warn "  modele n'est pas disponible localement."
+    fi
 fi
 
 # BGE-M3 (conversion safetensors, evite CVE-2025-32434) + reranker
